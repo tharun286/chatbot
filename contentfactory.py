@@ -454,3 +454,27 @@ class HLSChatbotHistory(Base):
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+class SupportTicket(Base):
+    __tablename__ = "support_tickets"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True, index=True)
+    ticket_id: Mapped[str] = mapped_column(String(50), unique=True, nullable=False, index=True)
+    session_uuid: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    user_email: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    user_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    user_phone: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    domain: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    brand: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    journey: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    original_question: Mapped[str | None] = mapped_column(Text, nullable=True)
+    issue_category: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    issue_description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    priority: Mapped[str] = mapped_column(String(50), nullable=False, default="normal")
+    status: Mapped[str] = mapped_column(String(50), nullable=False, default="open")
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow
+    )
+    ipaddress: Mapped[str | None] = mapped_column(String(100), nullable=True)
+
