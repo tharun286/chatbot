@@ -1,0 +1,924 @@
+import { useState, useEffect, useRef } from 'react';
+import { Input } from '../ui/input';
+import { ScrollArea } from '../ui/scroll-area';
+import { Card } from '../ui/card';
+import { X, Send, ChevronDown, Bot, UserIcon, FileText, Globe, Sparkles } from 'lucide-react';
+import { flask_url, middleware_url } from '../../../utils/constants';
+import { HlsChatbotIcon } from './HlsChatbotIcon';
+import { User } from "../../hls_main_page";
+import { getPublicIp } from '../../services/utilityApi'
+
+type Source = {
+  id: number;
+  document_id: string;
+  filename: string;
+  document_path: string;
+  microsite_path: string;
+  page_number?: number | null;
+};
+
+type AdverseEventCheck = {
+  isAdverseEvent: boolean;
+  isEmergency?: boolean;
+  product_name: string;
+  event_text?: string;
+  actual_event_asserted?: boolean;
+  negated?: boolean;
+  hypothetical?: boolean;
+  confidence?: number;
+};
+
+type Message = {
+  id: string;
+  role: 'user' | 'assistant';
+  content: string;
+  timestamp: Date;
+  sources?: Source[];
+  adverse_event_check?: AdverseEventCheck;
+  follow_up_questions?: string[];
+  show_msl_button?: boolean;
+  show_create_ticket_button?: boolean;
+  pending_ticket_classification?: any;
+  pending_ticket_original_question?: string;
+  session_uuid?: string;
+  journey?: string;
+};
+
+function getAuthHeaders(): Record<string, string> {
+  const token = localStorage.getItem('token');
+  return { Authorization: `Bearer ${token}` };
+}
+
+function getFormattedConversation(messages: Message[]): string {
+  return messages
+    .slice(-10)
+    .map(m => `${m.role === 'user' ? 'user' : 'bot'}: ${m.content}`)
+    .join('\n')
+    .trim();
+}
+
+const DOMAIN_GREETINGS: Record<string, string> = {
+  hls: "Hello! I'm your HLS AI assistant. I can help you with questions about prescribing information, dosage, side effects, mechanism of action, and more. How can I assist you today?",
+  zenseai: "Hello! I'm your ZenseAI Content Factory assistant. I can help you find information from your content documents. How can I assist you today?",
+};
+
+const DOMAIN_NAMES: Record<string, string> = {
+  hls: 'HLS AI Assistant',
+  zenseai: 'ZenseAI Assistant',
+};
+
+const DOMAIN_PLACEHOLDER: Record<string, string> = {
+  hls: 'Ask any HLS-related question...',
+  zenseai: 'Ask about your content documents...',
+};
+
+export function Chatbot({ domain = 'hls', user }: { domain?: string, user?: User}) {
+  const greeting = DOMAIN_GREETINGS[domain] ?? DOMAIN_GREETINGS.hls;
+
+  // One UUID per mounted Chatbot instance; resets when the component unmounts/remounts
+  const [sessionUuid] = useState<string>(() => crypto.randomUUID());
+
+  const [isOpen, setIsOpen] = useState(false);
+  const [isMinimized, setIsMinimized] = useState(false);
+  const [showEndConfirmation, setShowEndConfirmation] = useState(false);
+  const [unreadMessages, setUnreadMessages] = useState(0);
+  const [messages, setMessages] = useState<Message[]>([
+    {
+      id: '1',
+      role: 'assistant',
+      content: greeting,
+      timestamp: new Date(),
+    },
+  ]);
+  const [inputValue, setInputValue] = useState('');
+  const [isTyping, setIsTyping] = useState(false);
+  const [showTimeoutWarning, setShowTimeoutWarning] = useState(false);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const inactivityTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages]);
+
+  // ── handlers ────────────────────────────────────────────────────────────────
+
+  const handleOpen = () => {
+    setIsOpen(true);
+    setIsMinimized(false);
+    setUnreadMessages(0);
+  };
+
+  const handleMinimize = () => setIsMinimized(true);
+
+  const handleCloseRequest = () => setShowEndConfirmation(true);
+  const handleCancelClose = () => setShowEndConfirmation(false);
+  const handleConfirmClose = () => {
+    setMessages([{
+      id: '1',
+      role: 'assistant',
+      content: greeting,
+      timestamp: new Date(),
+    }]);
+    setInputValue('');
+    setIsOpen(false);
+    setIsMinimized(false);
+    setShowEndConfirmation(false);
+    setShowTimeoutWarning(false);
+    setUnreadMessages(0);
+  };
+
+  // ── inactivity timeout ───────────────────────────────────────────────────────
+
+  const startInactivityTimer = () => {
+    if (inactivityTimerRef.current) clearTimeout(inactivityTimerRef.current);
+    inactivityTimerRef.current = setTimeout(() => {
+      setShowTimeoutWarning(true);
+    }, 1 * 60 * 1000);
+  };
+
+  const resetActivity = () => {
+    setShowTimeoutWarning(false);
+    startInactivityTimer();
+  };
+
+  // Start timer when chat opens; stop when it closes or is minimized
+  useEffect(() => {
+    if (isOpen && !isMinimized) {
+      startInactivityTimer();
+    } else {
+      if (inactivityTimerRef.current) clearTimeout(inactivityTimerRef.current);
+      setShowTimeoutWarning(false);
+    }
+    return () => {
+      if (inactivityTimerRef.current) clearTimeout(inactivityTimerRef.current);
+    };
+  }, [isOpen, isMinimized]);
+  const createSupportTicket = async (message: Message) => {
+  try {
+    setIsTyping(true);
+
+    const ip_address = await getPublicIp();
+
+    const res = await fetch(
+      `${middleware_url}/batch_process/hls_platform/hls_chat`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...getAuthHeaders(),
+        },
+        body: JSON.stringify({
+          action: "create_ticket",
+          session_uuid: message.session_uuid ?? sessionUuid,
+          pending_ticket_classification:
+          message.pending_ticket_classification,
+          pending_ticket_original_question:
+          message.pending_ticket_original_question,
+          domain,
+          user,
+          ip_address,
+        }),
+      }
+    );
+
+    const data = await res.json();
+
+    setMessages(prev => [
+      ...prev,
+      {
+        id: Date.now().toString(),
+        role: 'assistant',
+        content: data.response,
+        timestamp: new Date(),
+      },
+    ]);
+  } catch (err: any) {
+    console.error(err);
+  } finally {
+    setIsTyping(false);
+  }
+};
+
+
+  const sendMessage = async (query: string) => {
+    if (!query.trim()) return;
+    resetActivity();
+
+    const userMsg: Message = {
+      id: Date.now().toString(),
+      role: 'user',
+      content: query,
+      timestamp: new Date(),
+    };
+
+    const updatedMessages = [...messages, userMsg];
+    setMessages(updatedMessages);
+    setInputValue('');
+    setIsTyping(true);
+
+    try {
+      const ip_address = await getPublicIp();
+      const res = await fetch(`${middleware_url}/batch_process/hls_platform/hls_chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+        body: JSON.stringify({
+          query,
+          conversation_history: getFormattedConversation(updatedMessages),
+          domain,
+          user,
+          ip_address,
+          session_uuid: sessionUuid,
+        }),
+      });
+
+      const data = await res.json();
+      if (data.error) throw new Error(data.error);
+
+      const assistantMsg: Message = {
+        id: (Date.now() + 1).toString(),
+        role: 'assistant',
+        content: data.response ?? '',
+        timestamp: new Date(),
+        sources: data.sources ?? [],
+        adverse_event_check: data.adverse_event_check,
+        follow_up_questions: Array.isArray(data.follow_up_questions) ? data.follow_up_questions : [],
+        show_msl_button: data.show_msl_button ?? false,
+        show_create_ticket_button:
+          data.show_create_ticket_button ?? false,
+
+        session_uuid: data.session_uuid,
+        journey: data.journey,
+        pending_ticket_classification:
+          data.pending_ticket_classification,
+        pending_ticket_original_question:
+          data.pending_ticket_original_question,
+      };
+
+      setMessages(prev => [...prev, assistantMsg]);
+      if (isMinimized) setUnreadMessages(prev => prev + 1);
+    } catch (err: any) {
+      setMessages(prev => [...prev, {
+        id: (Date.now() + 1).toString(),
+        role: 'assistant',
+        content: `Sorry, something went wrong: ${err.message ?? 'Unknown error'}`,
+        timestamp: new Date(),
+      }]);
+    } finally {
+      setIsTyping(false);
+    }
+  };
+
+  const handleSendMessage = () => sendMessage(inputValue);
+
+  const openDocument = async (source: Source) => {
+    try {
+      const res = await fetch(`${middleware_url}/batch_process/hls_platform/view_file`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+        body: JSON.stringify({ file_path: source.document_path }),
+      });
+      if (!res.ok) throw new Error('Failed to fetch document');
+      const blob = await res.blob();
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = source.filename;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error('Error opening document:', err);
+    }
+  };
+
+  const openMicrosite = async (source: Source) => {
+    try {
+      const res = await fetch(`${middleware_url}/batch_process/hls_platform/send_microsite_by_id`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+        body: JSON.stringify({ id: source.id }),
+      });
+      if (!res.ok) throw new Error('Failed to fetch microsite');
+      const blob = await res.blob();
+      const url = window.URL.createObjectURL(blob);
+      window.open(url, '_blank');
+    } catch (err) {
+      console.error('Error opening microsite:', err);
+    }
+  };
+
+  const openReportingSite = (productName?: string) => {
+    try {
+      const base = 'https://www.example.com/report';
+      const url = productName ? `${base}?product=${encodeURIComponent(productName)}` : base;
+      window.open(url, '_blank');
+    } catch (err) {
+      console.error('Error opening reporting site:', err);
+    }
+  };
+
+  const openMslContact = () => {
+    try {
+      window.open('https://www.example.com/connect-msl', '_blank');
+    } catch (err) {
+      console.error('Error opening MSL contact page:', err);
+    }
+  };
+
+  // ── render helpers ──────────────────────────────────────────────────────────
+
+  const renderMarkdown = (text: string) => {
+    const lines = text.split('\n');
+    return lines.map((line, i) => {
+      const parts = line.split(/(\*\*.*?\*\*)/g);
+      return (
+        <span key={i}>
+          {parts.map((part, j) =>
+            part.startsWith('**') && part.endsWith('**')
+              ? <strong key={j} className="font-semibold">{part.slice(2, -2)}</strong>
+              : <span key={j}>{part}</span>
+          )}
+          {i < lines.length - 1 && <br />}
+        </span>
+      );
+    });
+  };
+
+  // ── floating icon (closed or minimized) ────────────────────────────────────
+
+  // ── HLS chat window ─────────────────────────────────────────────────────────────
+  if (domain === 'hls') {
+    return (
+      <div className="hls_domain">
+        {/* Chat icon */}
+        <div
+          className={`
+          fixed bottom-4 right-4 z-50
+          transition-all duration-300
+          ${isOpen && !isMinimized ? 'opacity-0 pointer-events-none' : 'opacity-100'}
+        `}
+        >
+          <HlsChatbotIcon
+            handleOpen={handleOpen}
+            unreadMessages={unreadMessages}
+          />
+        </div>
+
+        {/* Chat panel */}
+        <Card
+          onMouseMove={resetActivity}
+          onClick={resetActivity}
+          className={`
+          fixed right-0 top-0
+          max-w-125
+          h-full
+          bg-gray-300/70 backdrop-blur-xs shadow-xl rounded-none
+          flex flex-col z-50 overflow-hidden
+          pt-2
+          transition-all duration-300 ease-in-out
+          ${isOpen && !isMinimized
+              ? 'translate-x-0 opacity-100'
+              : 'translate-x-full opacity-0 pointer-events-none'
+            }
+        `}
+        >
+
+
+          {/* Header */}
+          <div className="px-3 py-2 flex items-center justify-between shrink-0">
+            <div className="flex items-center gap-2">
+              <div className="size-8 rounded-full flex items-center justify-center bg-[var(--hls-primary)] relative shadow-md">
+                <Sparkles className="size-4 text-white" />
+                <span className="absolute -bottom-0.5 -right-0.5 size-2 bg-green-400 rounded-full border-2 border-white animate-pulse" />
+              </div>
+              <div>
+                <div className="text-slate-800 text-lg ml-2 font-bold">{DOMAIN_NAMES[domain] ?? DOMAIN_NAMES.hls}</div>
+              </div>
+            </div>
+            <div className="flex items-center gap-1">
+              <div
+                onClick={handleMinimize}
+                className="group h-7 w-7 flex items-center justify-center rounded-lg hover:bg-[var(--hls-primary)] transition-colors cursor-pointer"
+              >
+                <ChevronDown className="size-4 text-slate-600 group-hover:text-white" />
+              </div>
+              <div
+                onClick={handleCloseRequest}
+                className="group h-7 w-7 flex items-center justify-center rounded-lg hover:bg-[var(--hls-primary)] transition-colors cursor-pointer"
+              >
+                <X className="size-4 text-slate-600 group-hover:text-white" />
+              </div>
+            </div>
+          </div>
+
+          {/* Messages */}
+          <ScrollArea className="flex-1 min-h-0 px-3 py-2">
+            <div className="space-y-2.5 pb-1">
+              {messages.map((message) => (
+                <div key={message.id} className={`flex gap-2 min-w-0 ${message.role === 'user' ? 'flex-row-reverse' : 'flex-row'}`}>
+                  <div className={`size-7 flex items-center justify-center shrink-0 bg-[var(--hls-primary)]} rounded-xl`}>
+                    {message.role === 'user'
+                      ? <UserIcon className="size-3.5 text-[var(--hls-primary)]" />
+                      : <Bot className="size-5 text-[var(--hls-primary)] bg-transparent rounded-lg" />
+                    }
+                  </div>
+                  <div className={`max-w-[80%] min-w-0 rounded-2xl px-3 py-1.5 shadow-sm ${message.role === 'user'
+                    ? 'bg-linear-to-br from-purple-100 to-purple-50 text-slate-800'
+                    : 'bg-linear-to-br from-blue-50 to-indigo-50 text-slate-700 border border-blue-100'
+                    }`}>
+                    <p className="text-sm leading-relaxed whitespace-pre-wrap" style={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{renderMarkdown(message.content)}</p>
+                    {message.role === 'assistant' && message.adverse_event_check && message.adverse_event_check.isAdverseEvent && (
+                      <div className="mt-2 pt-2 border-t border-red-200">
+                        <div className="mt-2 p-2 bg-red-50 border border-red-200 rounded-lg">
+                          <p className="text-[11px] font-semibold text-red-700">
+                            ⚠️ Adverse Event Detected
+                          </p>
+                          <p className="text-[10px] text-red-600 mt-1">
+                            An adverse event has been detected. Please navigate to <span className="font-semibold">{message.adverse_event_check.product_name}</span>'s reporting site to report this adverse event, or call <span className="font-semibold">1-800-332-1088</span>.
+                          </p>
+                          <div className="mt-2 flex justify-end">
+                            <button
+                              onClick={() => openReportingSite(message.adverse_event_check?.product_name)}
+                              className="px-3 py-1.5 rounded bg-red-600 text-white text-sm hover:bg-red-700 transition-colors"
+                            >
+                              Report Adverse Event
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                    {message.role === 'assistant' && message.show_msl_button && (
+                      <div className="mt-2 pt-2 border-t border-blue-200">
+                        <div className="mt-2 p-2 bg-blue-50 border border-blue-200 rounded-lg">
+                          <p className="text-[11px] font-semibold text-blue-700">
+                            🔬 Clinical Support Available
+                          </p>
+                          <p className="text-[10px] text-blue-600 mt-1">
+                            Connect with a Medical Science Liaison for in-depth clinical discussions and scientific support.
+                          </p>
+                          <div className="mt-2 flex justify-end">
+                            <button
+                              onClick={openMslContact}
+                              className="px-3 py-1.5 rounded bg-blue-600 text-white text-sm hover:bg-blue-700 transition-colors"
+                            >
+                              Connect with MSL
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                    {message.role === 'assistant' &&
+  message.show_create_ticket_button && (
+    <div className="mt-2 pt-2 border-t border-orange-200">
+      <div className="mt-2 p-2 bg-orange-50 border border-orange-200 rounded-lg">
+        <p className="text-[11px] font-semibold text-orange-700">
+          🎫 Support Ticket
+        </p>
+
+        <p className="text-[10px] text-orange-600 mt-1">
+          Create a support ticket so our team can investigate this issue.
+        </p>
+
+        <div className="mt-2 flex justify-end">
+          <button
+            onClick={() => createSupportTicket(message)}
+            className="px-3 py-1.5 rounded bg-orange-600 text-white text-sm hover:bg-orange-700 transition-colors"
+          >
+            Create Ticket
+          </button>
+        </div>
+      </div>
+    </div>
+)}
+                    {message.role === 'assistant' && message.sources && message.sources.length > 0 && (
+                      <div className="mt-2 pt-2 border-t border-blue-100">
+                        <p className="text-[10px] font-semibold text-slate-500 mb-1">Sources:</p>
+                        <div className="flex flex-col gap-1">
+                          {message.sources.map((source) => (
+                            <div key={source.id} className="flex items-center gap-1.5 text-[11px] text-slate-600">
+                              <span className="flex-1 break-words whitespace-normal leading-tight" title={source.filename}>
+                                {source.filename}{source.page_number ? ` (Page: ${source.page_number})` : ''}
+                              </span>
+                              {source.document_path && (
+                                <div
+                                  onClick={() => openDocument(source)}
+                                  title="Open Document"
+                                  className="p-0.5 rounded hover:bg-purple-100 cursor-pointer transition-colors shrink-0"
+                                >
+                                  <FileText className="size-3.5 text-purple-500" />
+                                </div>
+                              )}
+                              {source.microsite_path && (
+                                <div
+                                  onClick={() => openMicrosite(source)}
+                                  title="Open Microsite"
+                                  className="p-0.5 rounded hover:bg-blue-100 cursor-pointer transition-colors shrink-0"
+                                >
+                                  <Globe className="size-3.5 text-blue-500" />
+                                </div>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    {message.role === 'assistant' && message.follow_up_questions && message.follow_up_questions.length > 0 && (
+                      <div className="mt-2 pt-2 border-t border-blue-100">
+                        <p className="text-[10px] font-semibold text-slate-500 mb-1.5">Suggested follow-ups:</p>
+                        <div className="flex flex-col gap-0.5">
+                          {message.follow_up_questions.map((q, idx) => (
+                            <button
+                              key={idx}
+                              onClick={() => !isTyping && sendMessage(q)}
+                              disabled={isTyping}
+                              className="text-left text-sm text-[var(--hls-primary)] hover:opacity-70 transition-opacity disabled:opacity-40 disabled:cursor-not-allowed leading-relaxed"
+                            >
+                              → {q}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    <p className="text-[10px] opacity-50 mt-0.5">
+                      {message.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                    </p>
+                  </div>
+                </div>
+              ))}
+
+              {isTyping && (
+                <div className="flex gap-2">
+                  <div className="size-7 rounded-full flex items-center justify-center shrink-0">
+                    <Bot className="size-4 text-[var(--hls-primary)] bg-transparent" />
+                  </div>
+                  <div className="max-w-[80%] rounded-2xl px-3 py-2 shadow-sm bg-linear-to-br from-blue-50 to-indigo-50 border border-blue-100">
+                    <div className="flex gap-1.5">
+                      <div className="size-2 bg-purple-400 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
+                      <div className="size-2 bg-purple-400 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
+                      <div className="size-2 bg-purple-400 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+                    </div>
+                  </div>
+                </div>
+              )}
+              <div ref={messagesEndRef} />
+            </div>
+          </ScrollArea>
+
+          {/* Input */}
+          <div className="px-3 py-2 border-t border-purple-200 bg-linear-to-r from-purple-50/50 to-blue-50/50 shrink-0">
+            <div className="flex gap-2">
+              <Input
+                type="text"
+                placeholder={DOMAIN_PLACEHOLDER[domain] ?? DOMAIN_PLACEHOLDER.hls}
+                value={inputValue}
+                onChange={(e) => { setInputValue(e.target.value); resetActivity(); }}
+                onKeyDown={(e) => e.key === 'Enter' && !isTyping && handleSendMessage()}
+                disabled={isTyping}
+                className="flex-1 bg-white border-purple-200 text-slate-700 placeholder:text-slate-400 focus:border-purple-400 focus:ring-2 focus:ring-purple-200 rounded-xl py-2 disabled:opacity-50 disabled:cursor-not-allowed"
+              />
+              <div
+                onClick={!inputValue.trim() || isTyping ? undefined : handleSendMessage}
+                className={`px-3 py-2 rounded-xl bg-[var(--hls-primary)] hover:bg-[var(--hls-primary)]/50 transition-all flex items-center justify-center shadow-md hover:shadow-lg ${!inputValue.trim() || isTyping ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
+              >
+                <Send className="size-4 text-white" />
+              </div>
+            </div>
+          </div>
+
+          {/* End Chat Confirmation */}
+          {showEndConfirmation && (
+            <div
+              className="absolute inset-0 bg-black/30 flex items-center justify-center z-10 rounded-none"
+              onClick={handleCancelClose}
+            >
+              <div
+                className="bg-white rounded-2xl shadow-2xl p-6 w-[80%] max-w-xs"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <p className="text-slate-800 font-semibold text-center mb-1">End Chat</p>
+                <p className="text-slate-500 text-sm text-center mb-4">
+                  Are you sure? This will clear the conversation.
+                </p>
+                <div className="flex justify-center gap-3">
+                  <button
+                    onClick={handleConfirmClose}
+                    className="px-4 py-1.5 rounded bg-red-500 text-white text-sm hover:bg-red-600 transition-colors"
+                  >
+                    Yes
+                  </button>
+                  <button
+                    onClick={handleCancelClose}
+                    className="px-4 py-1.5 rounded text-white bg-[var(--hls-primary)] text-sm transition-colors"
+                  >
+                    No
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Inactivity timeout warning */}
+          {showTimeoutWarning && (
+            <div className="absolute inset-0 bg-black/40 flex items-center justify-center z-20 rounded-none">
+              <div
+                className="bg-white rounded-2xl shadow-2xl p-6 w-[80%] max-w-xs text-center"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <p className="text-2xl mb-2">⏱</p>
+                <p className="text-slate-800 font-semibold mb-1">Still there?</p>
+                <p className="text-slate-500 text-sm mb-4">
+                  The chat will close due to inactivity.
+                </p>
+                <div className="flex justify-center gap-3">
+                  <button
+                    onClick={resetActivity}
+                    className="px-4 py-1.5 rounded bg-[var(--hls-primary)] text-white text-sm hover:opacity-80 transition-opacity"
+                  >
+                    Stay
+                  </button>
+                  <button
+                    onClick={handleConfirmClose}
+                    className="px-4 py-1.5 rounded bg-slate-100 text-slate-700 text-sm hover:bg-slate-200 transition-colors"
+                  >
+                    End Chat
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+        </Card>
+      </div>
+    )
+  }
+
+  // ── content factory chat window ─────────────────────────────────────────────────────────────
+
+  if (!isOpen || isMinimized) {
+    return (
+      <div
+        onClick={handleOpen}
+        className="fixed bottom-6 right-6 size-16 rounded-full bg-linear-to-br from-purple-500 to-blue-500 hover:from-purple-600 hover:to-blue-600 shadow-2xl hover:shadow-purple-500/50 transition-all z-50 flex items-center justify-center cursor-pointer"
+      >
+        <div className="relative">
+          <Bot className="size-9 text-white" />
+          <div className="absolute -top-1 -right-1 size-3.5 bg-green-400 rounded-full border-2 border-white animate-pulse" />
+          {unreadMessages > 0 && (
+            <span className="absolute -top-3 -right-3 size-5 bg-red-500 text-white text-[10px] font-bold rounded-full flex items-center justify-center border-2 border-white">
+              {unreadMessages}
+            </span>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <Card onMouseMove={resetActivity} onClick={resetActivity} className="fixed bottom-6 right-6 w-125 h-162.5 bg-white border-purple-200 shadow-2xl flex flex-col z-50 rounded-2xl overflow-hidden">
+
+      {/* Header */}
+      <div className="px-3 py-2 border-b border-purple-200 flex items-center justify-between bg-linear-to-r from-purple-100/80 to-blue-100/80 shrink-0">
+        <div className="flex items-center gap-2">
+          <div className="size-8 rounded-full bg-linear-to-br from-purple-500 to-blue-500 flex items-center justify-center relative shadow-md">
+            <Bot className="size-4 text-white" />
+            <span className="absolute -bottom-0.5 -right-0.5 size-2 bg-green-400 rounded-full border-2 border-white animate-pulse" />
+          </div>
+          <div>
+            <div className="text-slate-800 text-sm font-bold">{DOMAIN_NAMES[domain] ?? DOMAIN_NAMES.hls}</div>
+            <div className="text-slate-600 text-[10px]">Always here to help</div>
+          </div>
+        </div>
+        <div className="flex items-center gap-1">
+          <div
+            onClick={handleMinimize}
+            className="h-7 w-7 flex items-center justify-center rounded-lg hover:bg-purple-200/60 transition-colors cursor-pointer"
+          >
+            <ChevronDown className="size-4 text-slate-600" />
+          </div>
+          <div
+            onClick={handleCloseRequest}
+            className="h-7 w-7 flex items-center justify-center rounded-lg hover:bg-purple-200/60 transition-colors cursor-pointer"
+          >
+            <X className="size-4 text-slate-600" />
+          </div>
+        </div>
+      </div>
+
+      {/* Messages */}
+      <ScrollArea className="flex-1 min-h-0 px-3 py-2">
+        <div className="space-y-2.5 pb-1">
+          {messages.map((message) => (
+            <div key={message.id} className={`flex gap-2 min-w-0 ${message.role === 'user' ? 'flex-row-reverse' : 'flex-row'}`}>
+              <div className={`size-7 rounded-full flex items-center justify-center shrink-0 ${message.role === 'user'
+                ? 'bg-linear-to-br from-purple-100 to-purple-200'
+                : 'bg-linear-to-br from-purple-500 to-blue-500'
+                }`}>
+                {message.role === 'user'
+                  ? <UserIcon className="size-3.5 text-purple-700" />
+                  : <Bot className="size-4 text-white" />
+                }
+              </div>
+              <div className={`max-w-[80%] min-w-0 rounded-2xl px-3 py-1.5 shadow-sm ${message.role === 'user'
+                ? 'bg-linear-to-br from-purple-100 to-purple-50 text-slate-800'
+                : 'bg-linear-to-br from-blue-50 to-indigo-50 text-slate-700 border border-blue-100'
+                }`}>
+                <p className="text-sm leading-relaxed whitespace-pre-wrap" style={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{renderMarkdown(message.content)}</p>
+                {message.role === 'assistant' && message.adverse_event_check && message.adverse_event_check.isAdverseEvent && (
+                  <div className="mt-2 pt-2 border-t border-red-200">
+                    <div className="mt-2 p-2 bg-red-50 border border-red-200 rounded-lg">
+                      <p className="text-[11px] font-semibold text-red-700">
+                        ⚠️ Adverse Event Detected
+                      </p>
+                      <p className="text-[10px] text-red-600 mt-1">
+                        An adverse event has been detected. Please navigate to <span className="font-semibold">{message.adverse_event_check.product_name}</span>'s reporting site to report this adverse event, or call <span className="font-semibold">1-800-332-1088</span>.
+                      </p>
+                      <div className="mt-2 flex justify-end">
+                        <button
+                          onClick={() => openReportingSite(message.adverse_event_check?.product_name)}
+                          className="px-3 py-1.5 rounded bg-red-600 text-white text-sm hover:bg-red-700 transition-colors"
+                        >
+                          Report Adverse Event
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+                {message.role === 'assistant' && message.show_msl_button && (
+                  <div className="mt-2 pt-2 border-t border-blue-200">
+                    <div className="mt-2 p-2 bg-blue-50 border border-blue-200 rounded-lg">
+                      <p className="text-[11px] font-semibold text-blue-700">
+                        🔬 Clinical Support Available
+                      </p>
+                      <p className="text-[10px] text-blue-600 mt-1">
+                        Connect with a Medical Science Liaison for in-depth clinical discussions and scientific support.
+                      </p>
+                      <div className="mt-2 flex justify-end">
+                        <button
+                          onClick={openMslContact}
+                          className="px-3 py-1.5 rounded bg-blue-600 text-white text-sm hover:bg-blue-700 transition-colors"
+                        >
+                          Connect with MSL
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+                {message.role === 'assistant' && message.sources && message.sources.length > 0 && (
+                  <div className="mt-2 pt-2 border-t border-blue-100">
+                    <p className="text-[10px] font-semibold text-slate-500 mb-1">Sources:</p>
+                    <div className="flex flex-col gap-1">
+                      {message.sources.map((source) => (
+                        <div key={source.id} className="flex items-start gap-1.5 text-[11px] text-slate-600">
+                          <span className="flex-1 break-words whitespace-normal leading-tight" title={source.filename}>
+                            {source.filename}{source.page_number ? ` (page. ${source.page_number})` : ''}
+                          </span>
+                          {source.document_path && (
+                            <div
+                              onClick={() => openDocument(source)}
+                              title="Open Document"
+                              className="p-0.5 rounded hover:bg-purple-100 cursor-pointer transition-colors shrink-0"
+                            >
+                              <FileText className="size-3.5 text-purple-500" />
+                            </div>
+                          )}
+                          {source.microsite_path && (
+                            <div
+                              onClick={() => openMicrosite(source)}
+                              title="Open Microsite"
+                              className="p-0.5 rounded hover:bg-blue-100 cursor-pointer transition-colors shrink-0"
+                            >
+                              <Globe className="size-3.5 text-blue-500" />
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {message.role === 'assistant' && message.follow_up_questions && message.follow_up_questions.length > 0 && (
+                  <div className="mt-2 pt-2 border-t border-blue-100">
+                    <p className="text-[15px] font-semibold text-slate-500 mb-1.5">Suggested follow-ups:</p>
+                    <div className="flex flex-col gap-0.5">
+                      {message.follow_up_questions.map((q, idx) => (
+                        <button
+                          key={idx}
+                          onClick={() => !isTyping && sendMessage(q)}
+                          disabled={isTyping}
+                          className="text-left text-sm text-purple-600 hover:opacity-70 transition-opacity disabled:opacity-40 disabled:cursor-not-allowed leading-relaxed"
+                        >
+                          {q}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                <p className="text-[10px] opacity-50 mt-0.5">
+                  {message.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                </p>
+              </div>
+            </div>
+          ))}
+
+          {isTyping && (
+            <div className="flex gap-2">
+              <div className="size-7 rounded-full flex items-center justify-center shrink-0 bg-linear-to-br from-purple-500 to-blue-500">
+                <Bot className="size-4 text-white" />
+              </div>
+              <div className="max-w-[80%] rounded-2xl px-3 py-2 shadow-sm bg-linear-to-br from-blue-50 to-indigo-50 border border-blue-100">
+                <div className="flex gap-1.5">
+                  <div className="size-2 bg-purple-400 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
+                  <div className="size-2 bg-purple-400 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
+                  <div className="size-2 bg-purple-400 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+                </div>
+              </div>
+            </div>
+          )}
+          <div ref={messagesEndRef} />
+        </div>
+      </ScrollArea>
+
+      {/* Input */}
+      <div className="px-3 py-2 border-t border-purple-200 bg-linear-to-r from-purple-50/50 to-blue-50/50 shrink-0">
+        <div className="flex gap-2">
+          <Input
+            type="text"
+            placeholder={DOMAIN_PLACEHOLDER[domain] ?? DOMAIN_PLACEHOLDER.hls}
+            value={inputValue}
+            onChange={(e) => { setInputValue(e.target.value); resetActivity(); }}
+            onKeyDown={(e) => e.key === 'Enter' && !isTyping && handleSendMessage()}
+            disabled={isTyping}
+            className="flex-1 bg-white border-purple-200 text-slate-700 placeholder:text-slate-400 focus:border-purple-400 focus:ring-2 focus:ring-purple-200 rounded-xl py-2 disabled:opacity-50 disabled:cursor-not-allowed"
+          />
+          <div
+            onClick={!inputValue.trim() || isTyping ? undefined : handleSendMessage}
+            className={`px-3 py-2 rounded-xl bg-linear-to-r from-purple-500 to-blue-500 hover:from-purple-600 hover:to-blue-600 transition-all flex items-center justify-center shadow-md hover:shadow-lg ${!inputValue.trim() || isTyping ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
+          >
+            <Send className="size-4 text-white" />
+          </div>
+        </div>
+      </div>
+
+      {/* End Chat Confirmation */}
+      {showEndConfirmation && (
+        <div
+          className="absolute inset-0 bg-black/30 flex items-center justify-center z-10 rounded-2xl"
+          onClick={handleCancelClose}
+        >
+          <div
+            className="bg-white rounded-2xl shadow-2xl p-6 w-[80%] max-w-xs"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <p className="text-slate-800 font-semibold text-center mb-1">End Chat</p>
+            <p className="text-slate-500 text-sm text-center mb-4">
+              Are you sure? This will clear the conversation.
+            </p>
+            <div className="flex justify-center gap-3">
+              <button
+                onClick={handleConfirmClose}
+                className="px-4 py-1.5 rounded-lg bg-red-500 text-white text-sm hover:bg-red-600 transition-colors"
+              >
+                Yes
+              </button>
+              <button
+                onClick={handleCancelClose}
+                className="px-4 py-1.5 rounded-lg bg-linear-to-r from-purple-500 to-blue-500 text-white text-sm hover:from-purple-600 hover:to-blue-600 transition-colors"
+              >
+                No
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Inactivity timeout warning */}
+      {showTimeoutWarning && (
+        <div className="absolute inset-0 bg-black/40 flex items-center justify-center z-20 rounded-2xl">
+          <div
+            className="bg-white rounded-2xl shadow-2xl p-6 w-[80%] max-w-xs text-center"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <p className="text-2xl mb-2">⏱</p>
+            <p className="text-slate-800 font-semibold mb-1">Still there?</p>
+            <p className="text-slate-500 text-sm mb-4">
+              The chat will close due to inactivity.
+            </p>
+            <div className="flex justify-center gap-3">
+              <button
+                onClick={resetActivity}
+                className="px-4 py-1.5 rounded-lg bg-linear-to-r from-purple-500 to-blue-500 text-white text-sm hover:opacity-80 transition-opacity"
+              >
+                Stay
+              </button>
+              <button
+                onClick={handleConfirmClose}
+                className="px-4 py-1.5 rounded-lg bg-slate-100 text-slate-700 text-sm hover:bg-slate-200 transition-colors"
+              >
+                End Chat
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </Card>
+  );
+}
