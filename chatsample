@@ -1,0 +1,134 @@
+
+User:
+
+I am unable to log in. Can you help?
+
+Chatbot:
+
+I’m sorry you’re having trouble logging in. I know how frustrating it can be when you need to get into your account and cannot access your work.
+
+I’ll help you work through this. Are you seeing any of the following?
+
+1.                   “Incorrect password”
+
+2.                   “Account locked”
+
+3.                   “Password expired”
+
+4.                   A different error
+
+User:
+
+It says incorrect password.
+
+ 
+
+Chatbot:
+
+Thank you. Let’s first rule out a couple of common issues.
+
+·                     Please check that Caps Lock is turned off.
+
+·                     Confirm that you are using your current corporate user ID.
+
+·                     If you recently changed your password, try the new password once more.
+
+Please avoid making repeated attempts, as this may lock the account.
+
+Were you able to log in after checking these items?
+
+User:
+
+No, I still cannot log in.
+
+ 
+
+Chatbot:
+
+I’m sorry that did not resolve it. It looks like your password may need to be reset.
+
+I can help initiate a secure password reset. For your protection, I will not ask you to share your current password in this chat.
+
+Would you like me to start the password-reset process?
+
+User:
+
+Yes.
+
+ 
+
+Chatbot:
+
+Certainly. I have identified the following account from your employee profile:
+
+·                     User ID: vinay.naik
+
+·                     Department: Commercial IT
+
+·                     Location: SFO
+
+·                     Registered contact: vinay.naik@corcept.com
+
+Please confirm that this is the account you need help with.
+
+User:
+
+Yes, that is correct.
+
+Chatbot:
+
+Thank you. I have checked the account status.
+
+A service ticket will allow the Service Desk to track the reset securely and document any required approvals.
+
+Would you like me to create a ServiceNow ticket on your behalf?
+
+ 
+
+User:
+
+Yes, please create a ticket.
+
+Chatbot:
+
+Of course. I’m creating the ticket using the account and contact information you just confirmed.
+
+ 
+
+Your ticket has been created successfully.
+
+·                     Ticket ID: SNOW-3253
+
+·                     Status: Open
+
+·                     Issue: Unable to log in / password reset
+
+·                     Assigned team: IT Support Group
+
+I’ll continue assisting you here and keep the ticket updated as we proceed.
+
+If approval is required under your organisation’s access policy, I will send the approval request automatically and let you know once it is completed.
+
+ 
+
+Your request has been approved. Thank you for your patience.
+
+The secure password-reset process is now being completed. You should have received one time password on your registered mobile number ending with 6962. Can you confirm if you have received it?
+
+ 
+
+User:
+
+Yes, I can see.
+
+ 
+
+Chatbot:
+
+Excellent. Please try signing in now. I’ll stay with you while you check.
+
+ 
+
+User:
+
+I am able to log in now.
