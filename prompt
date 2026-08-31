@@ -1,0 +1,40 @@
+RAG return is inside except
+try:
+    llm_json = json.loads(raw_response)
+
+    answer = ...
+    follow_up_questions = ...
+
+except Exception:
+    answer = raw_response
+    llm_sources = []
+    follow_up_questions = []
+
+    print("FINAL ANSWER =", answer)
+
+    return {
+        ...
+    }
+    it should come outside the except
+    try:
+    llm_json = json.loads(raw_response)
+
+    answer = ...
+    follow_up_questions = ...
+    show_msl_button = ...
+
+except Exception:
+    answer = raw_response
+    follow_up_questions = []
+    show_msl_button = is_hcp
+
+print("FINAL ANSWER =", answer)
+
+return {
+    "response": answer,
+    "refinedQuery": refined_query,
+    "sources": [],
+    "follow_up_questions": follow_up_questions,
+    "journey": "hcp" if is_hcp else "patient",
+    "show_msl_button": show_msl_button,
+}
