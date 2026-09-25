@@ -1,0 +1,418 @@
+Absolutely. I can create your contribution report in the same professional style and structure as ReaderLink_Contribution_Report_SumanT 9 1, but focused on your work on the MLR Agents platform.
+
+I’ll cover the work we have done from the beginning, especially Auto Update Agent development from scratch, Veeva PromoMats integration, claim/document processing, annotation migration, Support Ticket Generation, backend APIs, React/TypeScript UI work, debugging, Git collaboration, and the DOCX/PPTX enhancement we are currently implementing.
+
+MLR Agents Project
+Contribution Summary: Agent Development, Automation & Full-Stack Integration
+
+Gollu Tharun Kumar | September 2026
+
+Overview
+
+Over the course of the MLR Agents project, my work has focused on building and enhancing an AI-assisted platform for automating Medical, Legal, and Regulatory content workflows.
+
+My contributions have covered both backend and frontend development, with significant focus on building the Auto Update Agent from scratch, integrating document and claim workflows with Veeva PromoMats, implementing annotation and document-version handling, developing the support ticket generation workflow, and improving the overall user experience through React-based UI enhancements.
+
+A major part of the work involved solving practical document-processing problems across multiple asset formats including HTML, DOCX, PPTX, and PDF, while ensuring document integrity, formatting preservation, correct version creation, and traceability between claims, annotations, and updated assets.
+
+More recently, I extended the Auto Update workflow beyond HTML so that claim updates can also be intelligently applied to Word and PowerPoint assets, using LLM-assisted contextual matching where the wording in the document is not necessarily an exact match to the source claim.
+
+1. Understanding the MLR Agent Architecture
+
+One of my initial areas of work was understanding how the different MLR agents, backend services, frontend components, database entities, and external systems interact.
+
+This included understanding the complete flow between:
+
+React/TypeScript frontend
+FastAPI backend services
+Agent orchestration
+Claim and annotation data
+Document processing
+Veeva PromoMats APIs
+Document version management
+Support ticket workflows
+Database persistence
+LLM-based reasoning and text processing
+
+Rather than working only on individual isolated components, I developed an understanding of how a user action in the UI moves through the backend, triggers agent logic, interacts with documents or Veeva, and eventually returns the result to the UI.
+
+This understanding became especially important while developing the Auto Update Agent because document modification requires coordination between several systems rather than simply replacing text in a file.
+
+2. Auto Update Agent: Built From Scratch
+
+A major contribution was the development and continuous enhancement of the Auto Update Agent.
+
+The objective of the agent is to automatically identify assets impacted by a claim change and update the relevant content while maintaining document traceability and review information.
+
+The workflow developed around the agent includes:
+
+Receiving the claim that has been changed.
+Identifying documents associated with that claim.
+Retrieving document and annotation information.
+Locating the claim-related content inside the asset.
+Using contextual information and LLM reasoning where appropriate.
+Generating the updated content.
+Updating the actual source asset.
+Creating the correct new document version.
+Migrating/recreating necessary annotations.
+Maintaining linkage between the previous and newly created document versions.
+Generating information necessary for reviewers to compare changes.
+
+Particular attention was given to ensuring that an update does not accidentally create multiple document versions when several annotations belonging to the same asset are processed.
+
+This required restructuring the update flow so that document processing and uploading happen at the appropriate level rather than blindly creating a new Veeva version for every annotation.
+
+3. Veeva PromoMats Integration
+
+A significant portion of the Auto Update Agent work involved integrating the workflow with Veeva PromoMats.
+
+The integration required handling several pieces of document metadata, including:
+
+Document ID
+Document name
+Major version
+Minor version
+Source files
+Renditions/PDF files
+Annotations
+Claims associated with annotations
+Newly created document versions
+
+One of the important engineering challenges was maintaining version consistency throughout the workflow.
+
+I added debugging and validation around document IDs, names, versions, downloaded files, and source assets to ensure that the version used for annotation processing and the version ultimately updated in Veeva correspond correctly.
+
+This was important because incorrect version handling could result in updates or annotations being attached to the wrong asset version.
+
+4. Annotation Processing and Migration
+
+Annotations are an important part of the regulatory review workflow because they connect content appearing in an asset with supporting claims.
+
+I worked on the logic responsible for:
+
+Retrieving annotations associated with documents.
+Identifying the claim associated with an annotation.
+Extracting annotation text.
+Matching annotations with the claim being updated.
+Determining which content actually needs modification.
+Maintaining annotation information after an asset is updated.
+Supporting annotation migration into the newly generated document version.
+
+An important requirement was ensuring that when a document contains multiple annotations associated with different claims, updating one claim does not incorrectly modify content associated with another claim.
+
+This became especially important when adding Word and PowerPoint support.
+
+5. HTML Claim Auto-Update Workflow
+
+The initial Auto Update functionality primarily operated on HTML-based assets.
+
+The workflow identifies the HTML sentence associated with the relevant annotation and uses the previous and newly approved versions of the claim to determine how that particular sentence should change.
+
+One particularly useful aspect of the HTML flow was its ability to use the relevant contextual sentence instead of relying only on exact full-string equality.
+
+This became the reference architecture when expanding the same Auto Update capability to Word and PowerPoint documents.
+
+6. Extending Auto Update to DOCX Documents
+
+One of the major recent enhancements was adding support for Microsoft Word (DOCX) assets.
+
+A key issue encountered was that the claim stored in the system and the actual sentence appearing inside the Word document are frequently not identical strings.
+
+For example, an approved claim may be incorporated into a longer marketing sentence or contain slightly different contextual wording.
+
+Therefore, simple logic such as:
+
+Plain Text
+if document_text == old_claim
+Show more lines
+
+was not reliable enough.
+
+To solve this, I worked on a hybrid approach consisting of:
+
+Step 1: Annotation-based targeting
+
+Use the Veeva annotation to determine which claim-related text needs to be located.
+
+Step 2: Locate relevant document content
+
+Extract and inspect Word paragraphs to identify the content corresponding to the annotation.
+
+Step 3: Contextual/LLM processing
+
+Use LLM reasoning where needed to understand the difference between:
+
+original approved claim,
+text appearing in the Word asset, and
+updated approved claim.
+Step 4: Generate the appropriate document wording
+
+Rather than blindly replacing the entire paragraph with the new claim, generate wording that preserves the surrounding document context.
+
+Step 5: Apply the update
+
+Reuse centralized functionality from document_claim_updater.py for the actual document modification.
+
+Step 6: Preserve formatting
+
+The replacement logic was designed with special attention to retaining existing Word formatting rather than reconstructing entire paragraphs and unintentionally changing their appearance.
+
+This separation between identifying what the content should become and performing the physical document edit made the implementation more maintainable.
+
+7. Extending Auto Update to PPTX Documents
+
+After implementing the DOCX workflow, I began extending the same architecture to PowerPoint presentations.
+
+PPTX introduces an additional challenge because text can appear across:
+
+slides,
+text boxes,
+shapes, and
+multiple text runs.
+
+A presentation may also contain multiple annotations associated with several different claims.
+
+The implementation therefore focuses on processing only the annotation associated with the claim currently being updated.
+
+The workflow includes:
+
+Receive the annotation text.
+Locate the corresponding text inside the PPTX asset.
+Confirm that the targeted claim content exists.
+Retrieve the relevant PowerPoint text.
+Compare its context against the previous claim.
+Use the LLM to determine how the text should change based on the newly approved claim.
+Pass the resulting text to the PowerPoint claim-update logic.
+Preserve unrelated content and annotations.
+Generate only the required updated document version.
+
+The same centralized document_claim_updater.py logic is reused so that the Auto Update Agent remains responsible for orchestration while document-format-specific operations remain modular.
+
+8. Document Processing and Format Preservation
+
+Throughout the project, I worked with multiple document-processing approaches and libraries for:
+
+DOCX
+PPTX
+PDF
+HTML
+
+One of the main practical lessons was that text replacement inside enterprise documents cannot be treated as plain string manipulation.
+
+Word and PowerPoint frequently divide visible sentences into multiple runs containing different formatting properties.
+
+Replacing an entire paragraph or shape can therefore result in:
+
+Font changes
+Font-size changes
+Color loss
+Bold/italic loss
+Layout differences
+
+The implementation evolved toward run-aware and format-preserving replacement wherever possible.
+
+PDF processing introduced additional complications because rendered PDFs are fundamentally different from editable Office source formats, particularly when subset fonts are embedded.
+
+This reinforced the architectural decision to modify the original DOCX/PPTX source assets whenever possible rather than treating the generated PDF rendition as the primary editable document.
+
+9. Document Versioning and Data Integrity
+
+A major focus throughout Auto Update Agent development was maintaining document and version integrity.
+
+Special care was taken around scenarios where a document contains several annotations.
+
+A naïve implementation could create one new document version for every processed annotation.
+
+Instead, the workflow was designed so that multiple necessary modifications can be applied to the document while controlling when the resulting document is uploaded and versioned.
+
+This helps prevent:
+
+Duplicate document versions
+Repeated uploads
+Incorrect annotation-version relationships
+Partial document modifications
+Unexpected overwrites
+
+Extensive logging was also incorporated throughout this workflow so that each update can be traced through stages such as:
+
+Plain Text
+Claim identified
+→ Document identified
+→ Version confirmed
+→ Annotation matched
+→ Source document located
+→ Claim text located
+→ Replacement generated
+→ Document updated
+→ New version created
+→ Annotation migration performed
+Show more lines
+10. Support Ticket Generation Workflow
+
+In addition to Auto Update functionality, I contributed to the Support Ticket Generation feature.
+
+This involved both backend and frontend implementation.
+
+The workflow required capturing relevant user information from the interface, sending the request to the backend, creating/persisting the ticket information, and presenting the result back to the user.
+
+My work included:
+
+FastAPI endpoint integration
+Request/response handling
+Database interaction
+Async backend processing
+Error handling
+Frontend state management
+React event handling
+UI feedback
+End-to-end testing of the support flow
+
+The goal was to ensure that ticket creation behaves like an integrated product feature rather than an isolated backend API.
+
+11. UI / Frontend Development
+
+I also contributed to the React/TypeScript frontend for the MLR Agents platform.
+
+The UI work required connecting user interactions to the backend agent workflows while keeping state synchronized correctly.
+
+Areas worked on included:
+
+React component updates
+TypeScript handlers
+API integration
+User-input flows
+Agent response rendering
+Support-ticket UI
+Conditional UI behavior
+Error and success handling
+State updates based on backend responses
+Improving the overall interaction between the user and the agent platform
+
+Because the MLR workflow involves several backend steps, the frontend also needed to clearly represent what was happening without exposing unnecessary internal or sensitive implementation details.
+
+12. Backend Development and Debugging
+
+The backend work primarily involved Python and FastAPI, along with supporting service and agent logic.
+
+My contributions included:
+
+API endpoint development and modification
+Async function flows
+Agent orchestration
+Database/session handling
+Veeva API integration
+File downloading and processing
+Claim/annotation mapping
+Document update orchestration
+Error handling
+Logging and debugging
+
+I used targeted logging extensively while debugging complex workflows.
+
+Instead of relying on a generic success/failure message, logs were added around important checkpoints such as document identification, version retrieval, annotation matching, extracted text, replacement count, generated text, document upload, and newly created versions.
+
+This made it possible to trace failures to a particular stage of the Auto Update workflow.
+
+13. Git and Collaborative Development
+
+The development work was carried out in a collaborative Git-based environment involving multiple branches and changes from different team members.
+
+I worked with workflows involving:
+
+Feature branches
+Pulling remote changes
+Merging branches
+Resolving merge conflicts
+Stashing local modifications where required
+Handling diverged branches
+Verifying clean working trees
+Synchronizing local and remote branches
+Pushing completed changes for team visibility
+
+Extra attention was given to protecting uncommitted work before branch switches or merges.
+
+14. Key Technical Challenges Solved
+Area	Challenge	Approach / OutcomeAuto Update Agent	Build claim-update workflow from scratch	Developed document/claim/annotation orchestration
+Veeva Integration	Maintain correct document versions	Added explicit version tracking and consistency validation
+Multiple annotations	Risk of duplicate versions	Restructured processing/upload lifecycle
+DOCX matching	Document wording differs from approved claim	Context-aware matching with LLM assistance
+PPTX matching	Multiple slides/shapes/claims	Annotation-targeted PPT content discovery
+Formatting	Text replacements changed styling	Adopted run-aware document updates
+PDF processing	Embedded/subset fonts complicate editing	Prioritized original editable source assets
+Ticket Generation	Connect UI, API and persistence	Implemented end-to-end ticket workflow
+UI	Integrate complex agent operations	Added React/TypeScript state and interaction handling
+Debugging	Difficult multi-stage failures	Added targeted step-level logging
+15. Key Learnings
+
+This work helped me gain practical understanding across several areas:
+
+AI Agent Development
+
+Understanding how an agent goes beyond a single LLM call and instead orchestrates APIs, databases, business rules, documents, contextual reasoning, and external enterprise systems.
+
+Enterprise Document Automation
+
+Hands-on experience processing HTML, DOCX, PPTX, and PDF assets while dealing with formatting, text runs, document structure, annotations, and version control.
+
+LLM-Assisted Content Updating
+
+Understanding where deterministic code is sufficient and where LLM reasoning adds value.
+
+The final architecture combines both:
+
+Deterministic processing for document navigation, version control, file modification, API interaction, and validation.
+
+LLM reasoning for contextual text understanding when the claim stored in the system and the wording appearing in the asset are semantically related but not exact matches.
+
+Full-Stack Development
+
+The project strengthened my experience working across:
+
+React/TypeScript → FastAPI → Agent Logic → Database → Veeva → Document Processing
+
+rather than working exclusively at one layer of the application.
+
+Debugging Complex Workflows
+
+I developed a systematic approach of:
+
+Reproduce → instrument → isolate → verify data → identify root cause → fix → re-run → validate downstream impact.
+
+16. Technology and Knowledge Gained
+Area	Experience GainedPython	Agent logic, automation and document processing
+FastAPI	Async APIs and backend workflow orchestration
+React / TypeScript	Enterprise frontend development and API integration
+Veeva PromoMats	Documents, versions, annotations and claim workflows
+LLM Integration	Contextual claim interpretation and content generation
+DOCX	Run-aware text discovery and replacement
+PPTX	Slide/shape/run-level text processing
+PDF	Rendition extraction and limitations of direct editing
+HTML	Contextual claim identification and replacement
+Databases	Async persistence and application data flows
+Git	Collaborative branching, merging and conflict handling
+Debugging	End-to-end tracing of multi-stage agent workflows
+Summary
+
+My contribution to the MLR Agents project has grown from understanding the existing application into developing and owning significant end-to-end functionality across the platform.
+
+The Auto Update Agent has been the largest area of contribution. Starting from its initial implementation, I worked through Veeva document retrieval, claim and annotation identification, contextual content generation, source-document modification, version management, annotation migration, and support for different document formats.
+
+The initial HTML-focused workflow has subsequently been expanded toward a more general architecture capable of supporting DOCX and PPTX assets, while using LLM reasoning only where contextual interpretation is necessary and keeping critical operations such as versioning, file updates, and annotation handling deterministic.
+
+Alongside this work, I contributed to support ticket generation, backend APIs, database flows, React/TypeScript UI development, document-processing utilities, debugging, and Git-based collaborative development.
+
+Overall, the work has given me hands-on experience building a real enterprise AI application where AI reasoning, full-stack development, document automation, and regulated content-management workflows must work together reliably.
+
+Closing Reflection
+
+The MLR Agents project gave me practical exposure to developing an enterprise AI system beyond a conventional chatbot. I gained experience integrating LLM capabilities with deterministic application logic, external enterprise platforms, editable Office assets, document versioning, annotations, backend APIs, and a production-facing UI.
+
+The most important learning has been that successful enterprise AI automation is not only about generating the correct text. The entire workflow around that text, including identifying the correct content, preserving document fidelity, controlling versions, maintaining annotations, protecting data integrity, and providing traceability for reviewers, is equally important.
+
+How I structured this
+
+I followed the reference report's overall approach: Overview → role/work areas → technical contributions → challenges → learnings → knowledge gained → summary → reflection, while replacing the ReaderLink-specific QA/testing content with your actual MLR Agent engineering contributions. The reference report similarly emphasizes concrete ownership, technical problems solved, collaboration, learnings, and a closing reflection.
+
+Provide your feedback on BizChat
+Sources
+AllFilesFilesPower BIPower BI
