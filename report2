@@ -1,0 +1,19 @@
+ZenseAI.MLR
+Agent for Auto Tagging
+Currently we create a separate MLR PreCheck dossier, additionally the system should tag Text Asset and Reference Document directly in Veeva as shown by Vinay
+Agent for Harvesting Claims (One time process for entire brand)
+Select one brand, click "Harvest Claims"
+Agent should go through all the "approved" material for selected "brand" and identify the unique claims
+Output should be shown in a popup, display table of claims with an option to "edit"
+Once manually reviewed and confirmed, click "Upload to Veeva", this should create "Text Assets" in Veeva
+Agent for auto tagging (applicable for every content created by external parties)
+Select one document in first panel from Veeva (this can be potentially unapproved/draft asset)
+Click "Process", agent should generate MLR PreCheck Dossier (against claims, images, charts, references)
+Upload button - should create auto tagging in Veeva (vs TextAssets, Image Assets, References)
+Agent for auto updation of a claim
+First Panel should allow user to select a specific Text Claim from Veeva
+Manually update the label
+Click "process"
+Preview popup should show all the assets where the claim was used, each asset will have a "view" icon
+Once clicked, user can see a preview with just the change
+"Submit" button should create new versions in Veeva
