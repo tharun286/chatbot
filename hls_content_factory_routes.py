@@ -1,1544 +1,1889 @@
-from __future__ import annotations
-import os
-import json
 import asyncio
+import os, json, uuid, threading, tempfile, io, shutil
+import httpx
+import base64
+import jwt
+import traceback
+from werkzeug.utils import secure_filename
+from functools import wraps
 import requests
-from src.hls_platform.connectors.connector_factory import get_connector
-from src.db_session import AsyncSessionLocal
-from src.hls_platform.claim_annotations.llm_auto_update_agent import LLMAutoUpdateAgent
-from src.hls_platform.claim_annotations.document_claim_updater import (update_docx_claim,update_pptx_claim,update_pdf_claim)
-from src.hls_platform.claim_annotations.document_text_extraction_service import (DocumentTextExtractionService,)
-import re
-import pymupdf
-from bs4 import BeautifulSoup
-from difflib import SequenceMatcher
+from ..config import settings
+from fastapi import BackgroundTasks
+import uuid
 
-# 1. Place this import at the very top of your file
-from src.routers.hls_content_factory_routes import AUTO_UPDATE_PROGRESS
+from src.hls_platform.main import hls_uploads_path
+from sqlalchemy import select, text, func
+from fastapi.responses import FileResponse, JSONResponse
+from sqlalchemy.ext.asyncio import AsyncSession
+from src.hls_platform.brands import (
+    add_brand_helper,
+    edit_brand_helper,
+    get_all_brands_helper,
+    get_brand_by_id_helper,
+    get_brand_logo_helper,
+    get_image_url_helper,
+    sync_brands_from_connector_helper
+)
+from fastapi import APIRouter, Depends, Request, HTTPException, status
+from ..services.zenseai_content_factory_service import get_all_microsites_service, get_files_service
+from ..utils.zenseai_content_factory_utils import get_domain_param
+from sqlalchemy.ext.asyncio import AsyncSession
+from ..configurations.session import get_session, AsyncSessionLocal
+
+from src.hls_platform.veeva import hls_get_veeva_files_helper,hls_view_veeva_files_helper,hls_get_all_microsites_helper,send_microsite_by_id_helper
+from src.hls_platform.veeva_upload import upload_to_veeva_helper, upload_to_promomats_helper
+from src.hls_platform.veeva_push import push_to_veeva_helper, push_to_veeva_workflow_helper
+from src.hls_platform.hls_harvest_claim import harvest_claim_helper, create_claim_promomats_helper
+from src.hls_platform.hls_autotag import autotag_document_helper
+from src.hls_platform.claim_annotations.approved_image_phash_sync_service import ApprovedImagePhashSyncService
+
+from src.hls_platform.connector_helpers import get_files, get_not_autotagged_files
+
+from src.hls_platform.branding_docs import fetch_veeva_docs_helper, get_veeva_docs_helper, update_veeva_doc_helper, create_branding_doc_helper
+
+from src.hls_platform.document_types import (
+    get_all_document_types_helper, add_document_type_helper,
+    edit_document_type_helper, delete_document_type_helper,
+)
+
+from src.hls_platform.markets import (
+    get_all_markets_helper, add_market_helper,
+    edit_market_helper, delete_market_helper,
+)
+from src.hls_platform.hls_chatbot import hls_chat_helper
+
+from src.hls_platform.medaffairs import process_medaffairs_helper
+from src.hls_platform.local_documents import upload_local_document_helper
+
+from src.hls_platform.connectors.connector_factory import HLSDomainType, get_connector, get_connector_name_by_domain
+from src.hls_platform.main import hls_content_history_helper, hls_agent_history_helper, hls_convert_content_helper, hls_workflow_history_helper, hls_view_file_helper, hls_get_mlr_document_helper, hls_micro_drama_edit_helper, hls_banner_refine_helper
+
+from src.hls_platform.workflows import (
+    start_workflow as start_workflow_run,
+    get_workflow_run,
+    list_workflow_types,
+)
+
+from common.database.models.content_factory import HLSTransaction, HLSChatbotHistory, HLSHarvestedClaim, SupportTicket
+from common.observability_utils.logging import get_logger
+
+from src.hls_platform.connectors.connector_factory import get_connector_name_by_domain
+from src.hls_platform.movie_maker import stitch_movie, regenerate_movie_frame, split_video_into_scenes, trim_video_clip, transcribe_video_clip, extract_frame_from_clip, inpaint_movie_frame
+from src.hls_platform.claim_annotations.autotag_annotation_helper import AutotagAnnotationHelper
+from src.hls_platform.claim_annotations.autotag_from_existing_helper import AutotagFromExistingHelper
+from pydantic import BaseModel
 
 
-# 2. Add this standalone helper function right above the class definition
-def update_progress_checkpoint(task_id: str, stage_name: str):
-    if not task_id or task_id not in AUTO_UPDATE_PROGRESS:
-        return
 
-    current_record = AUTO_UPDATE_PROGRESS[task_id]
-    completed = current_record.get("completed_steps", [])
+logger = get_logger(__name__)
 
-    if stage_name not in completed:
-        completed.append(stage_name)
+hls_content_factory_router = APIRouter(tags=["HLSContentFactory"])
 
+
+
+
+class UpdateClaimRequest(BaseModel):
+    match_text: str
+
+
+
+    
+@hls_content_factory_router.get("/hls_platform/veeva_files")
+async def get_veeva_files(
+    request: Request,
+    db: AsyncSession = Depends(get_session),
+):
+    try:
+        domain = await get_domain_param(request)
+        connector_type = get_connector_name_by_domain(domain)
+
+        return await get_files(request, db, connector_type)
+
+    except ValueError as ve:
+        raise HTTPException(status_code=400, detail=str(ve))
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+def _crud_base():
+    return os.environ.get('CRUD_API_BASE', 'http://127.0.0.1:8114/crud')
+
+AUTO_UPDATE_PROGRESS = {}
+AUTO_UPDATE_RESULTS = {}
+
+def update_auto_update_progress(
+    task_id: str,
+    completed_steps: list,
+    current_step: str,
+):
     AUTO_UPDATE_PROGRESS[task_id] = {
         "task_id": task_id,
-        "current_step": stage_name,
-        "completed_steps": completed,
+        "current_step": current_step,
+        "completed_steps": completed_steps,
     }
 
+async def resolve_user_id_by_email(email: str, request: Request):
+    auth_header = request.headers.get("Authorization")
+    headers = {}
+    if auth_header:
+        headers["Authorization"] = auth_header
 
-class AutoUpdateAgent:
-    async def get_tagged_text_from_pdf(
-        
-        self,
-        document_id,
-        document_name,
-        major_version,
-        minor_version,
-        pdf_path,
-        claim_id=None,
-        old_claim=None,
-        new_claim=None,
-        target_new_claim_id=None,
-        task_id=None,
-        source_file_path=None,
-    ):
-        """
-        Extract annotations directly from an annotated PDF and save them into a txt file.
-        """
-        print("\n========================")
-        print("SOURCE FILE PROCESSING")
-        print("========================")
-        print(f"SOURCE FILE PATH = {source_file_path}")
-        if source_file_path:
-            ext = os.path.splitext(source_file_path)[1].lower()
-            print(f"FILE EXTENSION = {ext}")
-        print("========================\n")
-        doc = pymupdf.open(pdf_path)
+    async with httpx.AsyncClient(timeout=5.0) as client:
+        resp = await client.get(
+            f"{_crud_base()}/aibuddy/user/get_users",
+            headers=headers,
+        )
 
-        text_extractor = DocumentTextExtractionService()
-        extracted_document = text_extractor.extract(pdf_path)
+        if resp.status_code == 200:
+            for user in resp.json():
+                if user and user.get("email") and user.get("email").lower() == email.lower():
+                    return user.get("id")
 
-        results = []
-        old_claim_record_id = None
+    return None
 
-        connector = get_connector("promomats")
 
-        async with AsyncSessionLocal() as db:
-            await connector.load_credentials(db)
+async def get_transaction_metadata(transaction_uuid: str, request: Request):
+    auth_header = request.headers.get("Authorization")
+    headers = {}
+    if auth_header:
+        headers["Authorization"] = auth_header
 
-        claims_response = connector.get_claims()
+    async with httpx.AsyncClient(timeout=5.0) as client:
+        resp = await client.get(
+            f"{_crud_base()}/aibuddy/transactions/{transaction_uuid}",
+            headers=headers,
+        )
 
-        claims_lookup = {
-            claim["name"]: claim["id"] for claim in claims_response.get("claims", [])
-        }
+        if resp.status_code == 200:
+            return resp.json()
 
-        has_uploaded_document = False
-        latest_upload_context = None 
+    return None
 
-        docx_updated = False
-        docx_upload_result = None
-        docx_view_url = None
-        ppt_updated = False
-        ppt_upload_result = None
-        ppt_view_url = None
-        pdf_updated = False
-        pdf_upload_result = None
-        pdf_view_url = None
-        try:
-            for page_index in range(len(doc)):
-                page = doc[page_index]
-                annot = page.first_annot
 
-                while annot:
-                    try:
-                        view_url = None
-                        upload_result = None
+async def create_transaction_in_crud(
+    name: str,
+    created_by: int,
+    output_path: str,
+    files: list | None = None,
+    request: Request | None = None,
+):
+    headers = {"Content-Type": "application/json"}
+    if request is not None:
+        auth_header = request.headers.get("Authorization")
+        if auth_header:
+            headers["Authorization"] = auth_header
 
-                        annot_info = annot.info or {}
-                        rect = annot.rect
+    payload = {
+        "name": name,
+        "createdBy": int(created_by) if created_by is not None else 0,
+        "outputPath": output_path,
+        "files": files or [],
+    }
 
-                        x_left = rect.x0
-                        y_top = rect.y0
-                        x_right = rect.x1
-                        y_bottom = rect.y1
+    async with httpx.AsyncClient(timeout=5.0) as client:
+        resp = await client.post(
+            f"{_crud_base()}/aibuddy/create_transaction",
+            json=payload,
+            headers=headers,
+        )
 
-                        content = annot_info.get("content", "")
+        if resp.status_code in (200, 201):
+            return resp.json()
 
-                        annotation_text = re.sub(
-                            r"\s+", " ", annot_info.get("subject", "").strip()
-                        )
+    return None
 
-                        text_page_number = None
-                        text_start_index = None
-                        text_end_index = None
+
+def check_cost_limit(func):
+    @wraps(func)
+    async def wrapper(*args, **kwargs):
+        request: Request | None = None
+
+        for arg in args:
+            if isinstance(arg, Request):
+                request = arg
+                break
+
+        if request is None:
+            request = kwargs.get("request")
+
+        if request is None:
+            return await func(*args, **kwargs)
+
+        auth_header = request.headers.get("Authorization")
+        token = None
+
+        if auth_header and auth_header.startswith("Bearer "):
+            token = auth_header.split(" ", 1)[1]
+        if not token:
+            token = request.cookies.get("JWT-SESSION") or request.cookies.get("auth_token")
+
+        user_id = None
+        if token:
+            try:
+                jwt_secret_key = settings.jwt.secret_key
+                decoded = jwt.decode(token, jwt_secret_key, algorithms=["HS256"])
+                sub = decoded.get("sub")
+                if sub:
+                    db = await get_session()
+
+                    result = await db.execute(
+                        text("SELECT id FROM user_entity WHERE email = :email"),
+                        {"email": sub},
+                    )
+                    row = result.mappings().first()
+                    if row:
+                        user_id = row["id"]
+            except Exception:
+                user_id = None
+
+        if user_id:
+            try:
+                async with httpx.AsyncClient(timeout=5.0) as client:
+                    headers = {}
+                    if auth_header:
+                        headers["Authorization"] = auth_header
+
+                    resp = await client.get(
+                        f"{_crud_base()}/aibuddy/usage_metrics/get_user_usage_metrics?userId={user_id}",
+                        headers=headers,
+                    )
+
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        today_cost = data.get("today_cost", 0.0)
+                        daily_limit = data.get("daily_cost_limit", 0.0)
 
                         try:
-                            annotation_tokens = []
-
-                            for token in annotation_text.split():
-                                annotation_tokens.extend(
-                                    text_extractor._split_vault_token(token)
+                            if float(today_cost) >= float(daily_limit) and float(daily_limit) > 0.0:
+                                return JSONResponse(
+                                    {"error": "Daily cost limit exceeded. Please come back tomorrow."},
+                                    status_code=429,
                                 )
+                        except Exception:
+                            pass
+            except Exception:
+                pass
 
-                            annotation_tokens = [
-                                token.strip()
-                                for token in annotation_tokens
-                                if token.strip()
-                            ]
+        return await func(*args, **kwargs)
 
-                            for extracted_page in extracted_document.pages:
-
-                                page_tokens = [
-                                    word.text.strip() for word in extracted_page.words
-                                ]
-
-                                for start_idx in range(len(page_tokens)):
-
-                                    candidate_tokens = page_tokens[
-                                        start_idx : start_idx + len(annotation_tokens)
-                                    ]
-
-                                    if candidate_tokens == annotation_tokens:
-
-                                        text_page_number = extracted_page.page_number
-
-                                        text_start_index = extracted_page.words[
-                                            start_idx
-                                        ].word_index
-
-                                        text_end_index = extracted_page.words[
-                                            start_idx + len(annotation_tokens) - 1
-                                        ].word_index
-
-                                        break
-
-                                if text_start_index is not None:
-                                    break
-
-                        except Exception as e:
-                            print(f"⚠️ Failed to calculate " f"text indexes: {e}")
-
-                        match = re.search(r"Claim-\d+", content)
-
-                        annotation_claim_id = match.group(0) if match else ""
-
-                        html_sentence = None
-                        html_code = None
-                        updated_html_sentence = None
-                        updated_html_code = None
-                        updated_annotation_text = None
-                        html_file_path = None
-                        docx_claim_text = None
-                        updated_docx_text = None
-                        ppt_claim_text = None
-                        updated_ppt_text = None
-                        pdf_claim_text = None
-                        updated_pdf_text = None
-
-                        if annotation_claim_id:
-
-                            html_folder_path = os.path.join(
-                                os.path.dirname(
-                                    os.path.dirname(os.path.dirname(pdf_path))
-                                ),
-                                "claim_docs_download_html",
-                                os.path.basename(os.path.dirname(pdf_path)),
-                            )
-
-                            # 🎯 FIXED: Lookup the local file directly using document_id instead of document_name
-                            html_file_path = os.path.join(
-                                html_folder_path,
-                                f"{document_id}.html",
-                            )
-                            html_document_name = re.sub(
-                                r"\s*\(\d+\.\d+\)$", "", document_name
-                            ).strip()
-                            file_extension = (
-                                os.path.splitext(source_file_path)[1].lower()
-                                if source_file_path
-                                else ""
-                            )
-                            if file_extension == ".html":
-                               html_file_path = os.path.join(
-                                html_folder_path, f"{html_document_name}.html"
-                               )
-                               print(f"DOCUMENT NAME = {document_name}")
-                               print(f"HTML FILE PATH = {html_file_path}")
-                               print(f"FILE EXISTS = {os.path.exists(html_file_path)}")
-                            elif file_extension == ".docx":
-                                print("\n🚨 ENTERED DOCX BRANCH 🚨")
-                                print(f"SOURCE FILE = {source_file_path}")
-                                print(f"FILE EXTENSION = {file_extension}")
-                                print("\n========== DOCX DOCUMENT DETECTED ==========")
-                                print(f"DOCUMENT ID = {document_id}")
-                                print(f"DOCUMENT NAME = {document_name}")
-                                print(f"DOCX FILE = {source_file_path}")
-                                print(f"ANNOTATION CLAIM ID = {annotation_claim_id}")
-                                print(f"TARGET CLAIM ID = {claim_id}")
-                                print("============================================")
-                                if annotation_claim_id == claim_id:
-                                    docx_claim_text = self.get_docx_claim_text(
-                                        file_path=source_file_path,
-                                        annotation_text=annotation_text,
-                                    )
-                                    if docx_claim_text:
-                                        print("✅ TARGET CLAIM EXISTS IN DOCX")
-                                        print(f"DOCX TEXT = {docx_claim_text}")
-                                        if old_claim and new_claim:
-                                            print("\n========== CALLING LLM FOR DOCX ==========")
-                                            print(f"OLD CLAIM = {old_claim}")
-                                            print(f"NEW CLAIM = {new_claim}")
-                                            print(f"ANNOTATION TEXT = {annotation_text}")
-                                            print(f"DOCX TEXT = {docx_claim_text}")
-                                            print("==========================================")
-                                            async with AsyncSessionLocal() as db:
-                                                agent = LLMAutoUpdateAgent(db)
-                                                llm_result = await agent.generate_updated_html_sentence(
-                                                    old_claim=old_claim,
-                                                    annotation_text=annotation_text,
-                                                    html_text=docx_claim_text,
-                                                    html_code="",
-                                                    new_claim=new_claim,
-                                                    document_type="pdf",
-                                                )
-                                            updated_docx_text = llm_result.get(
-                                                "updated_annotation_text"
-                                            )
-                                            updated_annotation_text = updated_docx_text
-                                            print("\n========== DOCX LLM RESULT ==========")
-                                            print("CURRENT DOCX TEXT:")
-                                            print(docx_claim_text)
-                                            print()
-                                            print("UPDATED DOCX TEXT:")
-                                            print(updated_docx_text)
-                                            print("=====================================")
-                                            if updated_docx_text:
-                                                print("\n========== UPDATING DOCX FILE ==========")
-                                                print(f"FILE = {source_file_path}")
-                                                print(f"OLD TEXT = {docx_claim_text}")
-                                                print(f"NEW TEXT = {updated_docx_text}")
+    return wrapper
 
 
-                                                if os.path.exists(html_file_path):
-                                                    # 🚀 PATCH 1: Trigger step 8 checkpoint update
-                                                    update_progress_checkpoint(
-                                                        task_id, "Match Content In HTML"
-                                                    )
+@hls_content_factory_router.post('/hls_platform/convert_content')
+@check_cost_limit
+async def hls_convert_content(
+    request: Request,
+    db: AsyncSession = Depends(get_session)
+):
+    domain = await get_domain_param(request)
+    return await hls_convert_content_helper(request, db, domain)
 
-                                                replacements = update_docx_claim(
-                                                    file_path=source_file_path,
-                                                    old_claim=docx_claim_text,
-                                                    new_claim=updated_docx_text,
-                                                )
+@hls_content_factory_router.get("/hls_platform/brands")
+async def hls_get_all_brands(
+    request: Request,
+    db: AsyncSession = Depends(get_session)
+):
+    try:
+        domain = await get_domain_param(request)
+        return await get_all_brands_helper(domain, db)
 
-                                                print(f"DOCX REPLACEMENTS = {replacements}")
-                                                print("========================================")
+    except ValueError as ve:
+        raise HTTPException(status_code=400, detail=str(ve))
 
-                                                if replacements > 0:
-                                                    docx_updated = True
-                                                    print("✅ DOCX FILE UPDATED LOCALLY")
-                                                else:
-                                                    print("❌ DOCX FILE WAS NOT MODIFIED")
-                                    else:
-                                        print("❌ TARGET CLAIM NOT FOUND IN DOCX")
-                            elif file_extension == ".pdf":
-                                print("\n========== PDF DOCUMENT DETECTED ==========")
-                                print(f"DOCUMENT ID = {document_id}")
-                                print(f"DOCUMENT NAME = {document_name}")
-                                print(f"PDF FILE = {source_file_path}")
-                                print(f"ANNOTATION CLAIM ID = {annotation_claim_id}")
-                                print(f"TARGET CLAIM ID = {claim_id}")
-                                print("===========================================")
-                                if annotation_claim_id == claim_id:
-                                    pdf_match = self.get_pdf_claim_text(
-                                        file_path=source_file_path,
-                                        annotation_text= old_claim or annotation_text,
-                                    )
-                                    if pdf_match:
-                                        print("✅ TARGET CLAIM EXISTS IN PDF")
-                                        pdf_claim_text = pdf_match["text"]
-                                        print(f"PDF TEXT = {pdf_claim_text}")
-                                        if old_claim and new_claim:
-                                            print("\n========== CALLING LLM FOR PDF ==========")
-                                            print(f"OLD CLAIM = {old_claim}")
-                                            print(f"NEW CLAIM = {new_claim}")
-                                            print(f"ANNOTATION TEXT = {annotation_text}")
-                                            print(f"PDF TEXT = {pdf_claim_text}")
-                                            print("=========================================")
-                                            async with AsyncSessionLocal() as db:
-                                                agent = LLMAutoUpdateAgent(db)
-                                                llm_result = await agent.generate_updated_html_sentence(
-                                                    old_claim=old_claim,
-                                                    annotation_text=annotation_text,
-                                                    html_text=pdf_claim_text,
-                                                    html_code="",
-                                                    new_claim=new_claim,
-                                                )
-                                            updated_pdf_text = llm_result.get(
-                                                "updated_annotation_text"
-                                            )
-                                            print("\n========== PDF LLM RESULT ==========")
-                                            print("CURRENT PDF TEXT:")
-                                            print(pdf_claim_text)
-                                            print()
-                                            print("UPDATED PDF TEXT:")
-                                            print(updated_pdf_text)
-                                            print("====================================")
-                                            original_length = len(pdf_claim_text.strip())
-                                            updated_length = len(updated_pdf_text.strip())
-                                            print(f"ORIGINAL PDF TEXT LENGTH = {original_length}")
-                                            print(f"UPDATED PDF TEXT LENGTH = {updated_length}")
-                                            if updated_length > original_length:
-                                                print("❌ PDF UPDATE REJECTED")
-                                                print("UPDATED PDF TEXT IS LONGER THAN ORIGINAL PDF TEXT")
-                                            else:
-                                                print("✅ PDF LENGTH VALIDATION PASSED")   
-                                            replacements = update_pdf_claim(
-                                                file_path=source_file_path,
-                                                page_number=pdf_match["page"],
-                                                rect=pdf_match["rect"],
-                                                old_claim=pdf_claim_text,
-                                                new_claim=updated_pdf_text,
-                                            )
-                                            if replacements > 0:
-                                                pdf_updated = True
-                                                print(
-                                                    "✅ PDF FILE UPDATED LOCALLY"
-                                                )
-                                            else:
-                                                print(
-                                                    "❌ PDF FILE WAS NOT MODIFIED"
-                                                )
-                                            print(f"PDF REPLACEMENTS = {replacements}")
-                                            if replacements > 0:
-                                                pdf_updated = True
-                                                print("✅ PDF FILE UPDATED LOCALLY")
-                                            elif replacements == -1:
-                                                print(
-                                                    "❌ PDF UPDATE FAILED"
-                                                )
-                                    else:
-                                        print("❌ TARGET CLAIM NOT FOUND IN PDF")
-                            elif file_extension == ".pptx":
-                                print("\n========== PPT DOCUMENT DETECTED ==========")
-                                print(f"DOCUMENT ID = {document_id}")
-                                print(f"DOCUMENT NAME = {document_name}")
-                                print(f"PPT FILE = {source_file_path}")
-                                print(f"ANNOTATION CLAIM ID = {annotation_claim_id}")
-                                print(f"TARGET CLAIM ID = {claim_id}")
-                                print("===========================================")
-                                if annotation_claim_id == claim_id:
-                                    ppt_claim_text = self.get_ppt_claim_text(
-                                        file_path=source_file_path,
-                                        annotation_text=annotation_text,
-                                    )
-                                    if ppt_claim_text:
-                                        print("✅ TARGET CLAIM EXISTS IN PPT")
-                                        print(f"PPT TEXT = {ppt_claim_text}")
-                                        if old_claim and new_claim:
-                                            print("\n========== CALLING LLM FOR PPT ==========")
-                                            print(f"OLD CLAIM = {old_claim}")
-                                            print(f"NEW CLAIM = {new_claim}")
-                                            print(f"ANNOTATION TEXT = {annotation_text}")
-                                            print(f"PPT TEXT = {ppt_claim_text}")
-                                            print("=========================================")
-                                            async with AsyncSessionLocal() as db:
-                                                agent = LLMAutoUpdateAgent(db)
-                                                llm_result = await agent.generate_updated_html_sentence(
-                                                    old_claim=old_claim,
-                                                    annotation_text=annotation_text,
-                                                    html_text=ppt_claim_text,
-                                                    html_code="",
-                                                    new_claim=new_claim,
-                                                )
-                                            updated_ppt_text = llm_result.get(
-                                                "updated_annotation_text"
-                                            )
-                                            print("\n========== PPT LLM RESULT ==========")
-                                            print("CURRENT PPT TEXT:")
-                                            print(ppt_claim_text)
-                                            print()
-                                            print("UPDATED PPT TEXT:")
-                                            print(updated_ppt_text)
-                                            print("====================================")
-                                            if updated_ppt_text:
-                                                print("\n========== UPDATING PPT FILE ==========")
-                                                print(f"FILE = {source_file_path}")
-                                                print(f"OLD TEXT = {ppt_claim_text}")
-                                                print(f"NEW TEXT = {updated_ppt_text}")
-                                                replacements = update_pptx_claim(
-                                                    file_path=source_file_path,
-                                                    old_claim=ppt_claim_text,
-                                                    new_claim=updated_ppt_text,
-                                                )
-                                                print(f"PPT REPLACEMENTS = {replacements}")
-                                                print("======================================")
-                                                if replacements > 0:
-                                                    ppt_updated = True
-                                                    print("✅ PPT FILE UPDATED LOCALLY")
-                                                else:
-                                                  print("❌ PPT FILE WAS NOT MODIFIED")
-                            
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
-                                    else:
-                                        print("❌ TARGET CLAIM NOT FOUND IN PPT")
-                            if html_file_path and os.path.exists(html_file_path):
-                                print(
-                                    f"Searching HTML sentence in: "
-                                    f"{document_name}.html"
-                                )
-                                html_result = self.get_html_sentence(
-                                    claim_id=annotation_claim_id,
-                                    annotation_text=annotation_text,
-                                    html_file_path=html_file_path,
-                                )
-                                html_sentence = None
-                                html_code = None
+@hls_content_factory_router.post("/hls_platform/content_history")
+async def get_content_history(
+    request: Request,
+    db: AsyncSession = Depends(get_session)
+):
+    try:
+        domain = await get_domain_param(request)
+        return await hls_content_history_helper(db, domain)
 
-                                if html_result:
-                                    html_sentence = html_result.get("html_text")
-                                    html_code = html_result.get("html_code")
+    except ValueError as ve:
+        raise HTTPException(status_code=400, detail=str(ve))
 
-                            if (
-                                annotation_claim_id == claim_id
-                                and html_sentence
-                                and old_claim
-                                and new_claim
-                            ):
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
-                                async with AsyncSessionLocal() as db:
 
-                                    agent = LLMAutoUpdateAgent(db)
+@hls_content_factory_router.post("/hls_platform/agent_history")
+async def get_agent_history(
+    request: Request,
+    db: AsyncSession = Depends(get_session)
+):
+    try:
+        # domain = await get_domain_param(request)
+        domain = request.query_params.get("domain", "").lower()
+        return await hls_agent_history_helper(db, domain)
 
-                                    llm_result = (
-                                        await agent.generate_updated_html_sentence(
-                                            old_claim=old_claim,
-                                            annotation_text=annotation_text,
-                                            html_text=html_sentence,
-                                            html_code=html_code,
-                                            new_claim=new_claim,
-                                        )
-                                    )
+    except ValueError as ve:
+        raise HTTPException(status_code=400, detail=str(ve))
 
-                                    updated_annotation_text = llm_result.get(
-                                        "updated_annotation_text"
-                                    )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
-                                    updated_html_sentence = llm_result.get(
-                                        "updated_html_text"
-                                    )
+@hls_content_factory_router.post("/hls_platform/workflow_history")
+async def hls_workflow_history(
+    request: Request,
+    db: AsyncSession = Depends(get_session)
+):
+    domain = await get_domain_param(request)
+    return await hls_workflow_history_helper(db, domain)
 
-                                    updated_html_code = llm_result.get(
-                                        "updated_html_code"
-                                    )
+@hls_content_factory_router.post('/hls_platform/view_file')
+async def hls_view_file(
+    request: Request,
+    db: AsyncSession = Depends(get_session)
+):
+    return await hls_view_file_helper(request, db)
 
-                                    # 🚀 PATCH 2: Trigger step 9 context milestone update
-                                    update_progress_checkpoint(
-                                        task_id, "Generate Updated Content"
-                                    )
-
-                                    if updated_html_code:
-                                        # 🚀 PATCH 3: Trigger step 10 application write milestone update
-                                        update_progress_checkpoint(
-                                            task_id, "Apply Document Updates"
-                                        )
-
-                                        self.html_doc_update(
-                                            html_file_path=html_file_path,
-                                            original_html_code=html_code,
-                                            updated_html_code=updated_html_code,
-                                            html_text=html_sentence,
-                                        )
-
-                                        old_claim_record_id = claims_lookup.get(
-                                            annotation_claim_id
-                                        )
-
-                                        if not has_uploaded_document:
-                                            # 🚀 PATCH 4: Trigger step 11 upload tracking milestone update
-                                            update_progress_checkpoint(
-                                                task_id, "Upload Draft Documents"
-                                            )
-
-                                            upload_result = await self.upload_updated_document_and_migrate_annotations(
-                                                document_id=document_id,
-                                                updated_file_path=html_file_path,
-                                                source_major=major_version,
-                                                source_minor=minor_version,
-                                                old_claim_record_id=old_claim_record_id,
-                                            )
-                                            # ... Rest of state flag tracking [6]
-                                            has_uploaded_document = True
-                                        else:
-                                            upload_result = latest_upload_context
-
-                                        if upload_result and upload_result.get(
-                                            "success"
-                                        ):
-                                            # 🚀 PATCH 5: Trigger step 12 and 13 structural annotations update logs
-                                            update_progress_checkpoint(
-                                                task_id, "Migrate Claim Annotations"
-                                            )
-                                            update_progress_checkpoint(
-                                                task_id, "Remove Legacy Annotations"
-                                            )
-
-                                            compare_result = (
-                                                connector.get_document_compare_url(
-                                                    document_id=upload_result[
-                                                        "document_id"
-                                                    ],
-                                                    current_major=upload_result[
-                                                        "major_version"
-                                                    ],
-                                                    current_minor=upload_result[
-                                                        "minor_version"
-                                                    ],
-                                                    compare_major=major_version,
-                                                    compare_minor=minor_version,
-                                                )
-                                            )
-
-                                            view_url = compare_result.get("view_url")
-
-                                        print(f"CLAIM NAME = " f"{annotation_claim_id}")
-
-                                        print(
-                                            f"OLD CLAIM RECORD ID = "
-                                            f"{old_claim_record_id}"
-                                        )
-
-                                        print(
-                                            f"TARGET NEW CLAIM ID = "
-                                            f"{target_new_claim_id}"
-                                        )
-
-                                        if upload_result and upload_result.get(
-                                            "success"
-                                        ):
-
-                                            await self.create_rectangle_annotation(
-                                                document_id=upload_result[
-                                                    "document_id"
-                                                ],
-                                                major_version=upload_result[
-                                                    "major_version"
-                                                ],
-                                                minor_version=upload_result[
-                                                    "minor_version"
-                                                ],
-                                                claim_record_id=(
-                                                    target_new_claim_id
-                                                    if target_new_claim_id
-                                                    else old_claim_record_id
-                                                ),
-                                                page_number=page_index + 1,
-                                                x_left=x_left,
-                                                y_top=y_top,
-                                                x_right=x_right,
-                                                y_bottom=y_bottom,
-                                                annotation_text=annotation_text,
-                                                updated_annotation_text=updated_annotation_text,
-                                                text_page_number=text_page_number,
-                                                text_start_index=text_start_index,
-                                                text_end_index=text_end_index,
-                                            )
-
-                                    print(f"✅ Updated HTML generated for {annotation_claim_id}")
-
-                        print("VIEW URL =", view_url)
-                        print("UPLOAD RESULT =", upload_result)
-                        print(
-                            "RESULT OBJECT =",
-                            {
-                                "document_name": document_name,
-                                "view_url": view_url,
-                                "uploaded_document_id": (
-                                    upload_result.get("document_id")
-                                    if upload_result
-                                    else None
-                                ),
-                                "uploaded_major_version": (
-                                    upload_result.get("major_version")
-                                    if upload_result
-                                    else None
-                                ),
-                                "uploaded_minor_version": (
-                                    upload_result.get("minor_version")
-                                    if upload_result
-                                    else None
-                                ),
-                            },
-                        )
-
-                        results.append(
-                            {
-                                "claim_id": annotation_claim_id,
-                                "page_number": page_index + 1,
-                                "document_name": document_name,
-                                "view_url": view_url,
-                                "uploaded_document_id": (
-                                    upload_result.get("document_id")
-                                    if upload_result
-                                    else None
-                                ),
-                                "uploaded_major_version": (
-                                    upload_result.get("major_version")
-                                    if upload_result
-                                    else None
-                                ),
-                                "uploaded_minor_version": (
-                                    upload_result.get("minor_version")
-                                    if upload_result
-                                    else None
-                                ),
-                            }
-                        )
-
-                    except Exception as e:
-                        print(
-                            f"⚠️ Failed reading annotation "
-                            f"on page {page_index + 1}: {e}"
-                        )
-
-                    annot = annot.next
-        finally:
-            doc.close()
-        if docx_updated:
-            print("\n========== UPLOADING UPDATED DOCX ==========")
-            print(f"DOCUMENT ID = {document_id}")
-            print(f"DOCX FILE = {source_file_path}")
-            print(f"SOURCE VERSION = {major_version}.{minor_version}")
-            docx_upload_result = (
-                await self.upload_updated_document_and_migrate_annotations(
-                    document_id=document_id,
-                    updated_file_path=source_file_path,
-                    source_major=major_version,
-                    source_minor=minor_version,
-                )
-            )
-            print(f"DOCX UPLOAD RESULT = {docx_upload_result}")
-            if (
-                docx_upload_result
-                and docx_upload_result.get("success")
-            ):
-                print(
-                    "✅ DOCX UPLOADED ONCE: "
-                    f"{major_version}.{minor_version} -> "
-                    f"{docx_upload_result['major_version']}."
-                    f"{docx_upload_result['minor_version']}"
-                )
-                connector = get_connector("promomats")
-                async with AsyncSessionLocal() as db:
-                    await connector.load_credentials(db)
-                compare_result = connector.get_document_compare_url(
-                    document_id=docx_upload_result["document_id"],
-                    current_major=docx_upload_result["major_version"],
-                    current_minor=docx_upload_result["minor_version"],
-                    compare_major=major_version,
-                    compare_minor=minor_version,
-                )
-                docx_view_url = compare_result.get("view_url")
-                print(f"DOCX COMPARE URL = {docx_view_url}")
-                print("\n========== UPDATING DOCX RESULTS ==========")
-                print(f"TARGET CLAIM ID = {claim_id}")
-                print(f"TOTAL RESULTS = {len(results)}")
-                for result in results:
-                    if result.get("claim_id") == claim_id:
-                        result["uploaded_document_id"] = docx_upload_result["document_id"]
-                        result["uploaded_major_version"] = docx_upload_result["major_version"]
-                        result["uploaded_minor_version"] = docx_upload_result["minor_version"]
-                        result["view_url"] = docx_view_url
-            else:
-                print("❌ DOCX UPLOAD FAILED")
-        if pdf_updated:
-            print("\n========== UPLOADING UPDATED PDF ==========")
-            print(f"DOCUMENT ID = {document_id}")
-            print(f"PDF FILE = {source_file_path}")
-            print(f"SOURCE VERSION = {major_version}.{minor_version}")
-            pdf_upload_result = (
-                await self.upload_updated_document_and_migrate_annotations(
-                    document_id=document_id,
-                    updated_file_path=source_file_path,
-                    source_major=major_version,
-                    source_minor=minor_version,
-                )
-            )
-            print(f"PDF UPLOAD RESULT = {pdf_upload_result}")
-            if (
-                pdf_upload_result
-                and pdf_upload_result.get("success")
-            ):
-                print(
-                    "✅ PDF UPLOADED ONCE: "
-                    f"{major_version}.{minor_version} -> "
-                    f"{pdf_upload_result['major_version']}."
-                    f"{pdf_upload_result['minor_version']}"
-                )
-                connector = get_connector("promomats")
-                async with AsyncSessionLocal() as db:
-                    await connector.load_credentials(db)
-                compare_result = connector.get_document_compare_url(
-                    document_id=pdf_upload_result["document_id"],
-                    current_major=pdf_upload_result["major_version"],
-                    current_minor=pdf_upload_result["minor_version"],
-                    compare_major=major_version,
-                    compare_minor=minor_version,
-                )
-                pdf_view_url = compare_result.get("view_url")
-                print(f"PDF COMPARE URL = {pdf_view_url}")
-                print("\n========== UPDATING PDF RESULTS ==========")
-                for result in results:
-                    if result.get("claim_id") == claim_id:
-                        result["uploaded_document_id"] = (
-                        pdf_upload_result["document_id"]
-                        )
-                        result["uploaded_major_version"] = (
-                        pdf_upload_result["major_version"]
-                        )
-                        result["uploaded_minor_version"] = (
-                        pdf_upload_result["minor_version"]
-                        )
-                        result["view_url"] = pdf_view_url
-                else:
-                   print("❌ PDF UPLOAD FAILED")
-        if ppt_updated:
-            print("\n========== UPLOADING UPDATED PPT ==========")
-            print(f"DOCUMENT ID = {document_id}")
-            print(f"PPT FILE = {source_file_path}")
-            print(f"SOURCE VERSION = {major_version}.{minor_version}")
-            ppt_upload_result = (
-                await self.upload_updated_document_and_migrate_annotations(
-                    document_id=document_id,
-                    updated_file_path=source_file_path,
-                    source_major=major_version,
-                    source_minor=minor_version,
-                )
-            )
-            print(f"PPT UPLOAD RESULT = {ppt_upload_result}")
-            if (
-                ppt_upload_result
-                and ppt_upload_result.get("success")
-            ):
-                print(
-                    "✅ PPT UPLOADED ONCE: "
-                    f"{major_version}.{minor_version} -> "
-                    f"{ppt_upload_result['major_version']}."
-                    f"{ppt_upload_result['minor_version']}"
-                )
-                connector = get_connector("promomats")
-                async with AsyncSessionLocal() as db:
-                    await connector.load_credentials(db)
-                compare_result = connector.get_document_compare_url(
-                    document_id=ppt_upload_result["document_id"],
-                    current_major=ppt_upload_result["major_version"],
-                    current_minor=ppt_upload_result["minor_version"],
-                    compare_major=major_version,
-                    compare_minor=minor_version,
-                )
-                ppt_view_url = compare_result.get("view_url")
-                print(f"PPT COMPARE URL = {ppt_view_url}")
-                print("\n========== UPDATING PPT RESULTS ==========")
-                for result in results:
-                    if result.get("claim_id") == claim_id:
-                        result["uploaded_document_id"] = (
-                            ppt_upload_result["document_id"]
-                        )
-                        result["uploaded_major_version"] = (
-                            ppt_upload_result["major_version"]
-                        )
-                        result["uploaded_minor_version"] = (
-                            ppt_upload_result["minor_version"]
-                        )
-                        result["view_url"] = ppt_view_url
-            else:
-                print("❌ PPT UPLOAD FAILED")
-        safe_document_name = re.sub(r'[<>:"/\\|?*]', "_", document_name)
-
-        txt_file_path = os.path.join(
-            os.path.dirname(pdf_path), f"tagged_text_{safe_document_name}.txt"
+@hls_content_factory_router.get('/api/hls/download/{transaction_uuid}/{filename}')
+async def hls_download_by_uuid(
+    transaction_uuid: str,
+    filename: str,
+    db: AsyncSession = Depends(get_session)
+):
+    result = await db.execute(
+        select(HLSTransaction).where(
+            HLSTransaction.uuid == transaction_uuid
         )
-        with open(txt_file_path, "w", encoding="utf-8") as txt_file:
+    )
+    transaction = result.scalar_one_or_none()
 
-            txt_file.write(f"DOCUMENT ID: {document_id}\n")
-            txt_file.write(f"VERSION: {major_version}.{minor_version}\n")
-            txt_file.write("=" * 100 + "\n\n")
-            if not results:
-                txt_file.write("NO ANNOTATIONS FOUND\n")
+    if not transaction:
+        raise HTTPException(
+            status_code=404,
+            detail="Transaction not found"
+        )
 
-            for item in results:
+    file_path = transaction.output_file_path
 
-                txt_file.write(f"CLAIM ID: {item.get('claim_id')}\n")
+    if not file_path or not os.path.exists(file_path):
+        raise HTTPException(
+            status_code=404,
+            detail="File not found"
+        )
 
-                txt_file.write(f"OLD CLAIM RECORD ID: " f"{old_claim_record_id}\n")
+    return FileResponse(
+        path=file_path,
+        filename=filename,
+        media_type="application/octet-stream"
+    )
 
-                txt_file.write(f"TARGET NEW CLAIM ID: " f"{target_new_claim_id}\n")
+@hls_content_factory_router.get('/hls_platform/mlr_document/{transaction_uuid}')
+async def hls_get_mlr_document(transaction_uuid: str, db: AsyncSession = Depends(get_session)):
+    """Fetch MLR document by transaction UUID for HLS email previews."""
+    return await hls_get_mlr_document_helper(db, transaction_uuid)
 
-                txt_file.write(f"ANNOTATION TEXT: " f"{item.get('annotation_text')}\n")
+@hls_content_factory_router.post('/hls_platform/micro_drama_edit')
+@check_cost_limit
+async def hls_micro_drama_edit(
+    request: Request,
+    db: AsyncSession = Depends(get_session)
+):
+    return await hls_micro_drama_edit_helper(request, db)
 
-                txt_file.write(
-                    f"UPDATED ANNOTATION TEXT: "
-                    f"{item.get('updated_annotation_text')}\n"
+@hls_content_factory_router.post('/hls_platform/banner_refine')
+@check_cost_limit
+async def hls_banner_refine(
+    request: Request,
+    db: AsyncSession = Depends(get_session)
+):
+    domain = await get_domain_param(request)
+    return await hls_banner_refine_helper(request, domain, db)
+
+@hls_content_factory_router.get('/hls_platform/convert_status/{transaction_uuid}')
+async def hls_convert_status(transaction_uuid: str):
+    try:
+        status_file = os.path.join(hls_uploads_path, transaction_uuid, "status.json")
+
+        if os.path.exists(status_file):
+            with open(status_file, "r") as f:
+                return json.load(f)
+
+        return {"status": "processing"}
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "status": "error",
+                "message": str(e)
+            }
+        )
+@hls_content_factory_router.post('/hls_platform/stitch_movie')
+@check_cost_limit
+async def hls_stitch_movie(
+    request: Request,
+    db: AsyncSession = Depends(get_session)
+):
+    data = await request.json()
+
+    domain = (data.get("domain") or "sales").lower()
+    frames = data.get("frames", [])
+    logo_base64 = data.get("logoBase64")
+    logo_position = data.get("logoPosition", "top-right")
+    logo_opacity = data.get("logoOpacity", 100)
+    user_id = data.get("userId")
+    user_name = data.get("userName", "Unknown User")
+    cancel_token = request.query_params.get("cancel_token")
+
+    if not frames:
+        return JSONResponse({"error": "No frames provided"}, status_code=400)
+
+    # Non-sales domains: return video directly
+    if domain != "sales":
+        try:
+            stitch_result = await stitch_movie(
+                frames,
+                domain,
+                logo_base64=logo_base64,
+                logo_position=logo_position,
+                logo_opacity=logo_opacity,
+                cancel_token=cancel_token,
+                user_id=user_id,
+            )
+
+            final_video_path = stitch_result["video_path"]
+            tts_cost = stitch_result["tts_cost"]
+
+            response = FileResponse(final_video_path, media_type="video/mp4")
+            response.headers["X-Output-File-Path"] = final_video_path
+            response.headers["X-TTS-Cost"] = str(tts_cost)
+            response.headers["Access-Control-Expose-Headers"] = "X-Output-File-Path, X-TTS-Cost"
+
+            return response
+
+        except Exception as e:
+            return JSONResponse({"error": str(e)}, status_code=500)
+
+    # Sales domain: process in background and return transaction UUID
+    transaction_uuid = str(uuid.uuid4())
+    uuid_path = os.path.join(hls_uploads_path, transaction_uuid)
+    os.makedirs(uuid_path, exist_ok=True)
+    status_file = os.path.join(uuid_path, "status.json")
+
+    async def background_stitch():
+        print("BACKGROUND THREAD STARTED")
+        async def update_status(step_msg: str):
+            print(f"Updating status: {step_msg}")
+            try:
+                with open(status_file, "w", encoding="utf-8") as f:
+                    json.dump(
+                        {
+                            "status": "processing",
+                            "transaction_uuid": transaction_uuid,
+                            "step": step_msg,
+                        },
+                        f,
+                    )
+                print("status.json written")
+            except Exception:
+                print(f"UPDATE STATUS FAILED: {e}")
+                pass
+
+        try:
+            await update_status("Initializing video stitching...")
+
+            with open(status_file, "w", encoding="utf-8") as f:
+                json.dump(
+                    {
+                        "status": "processing",
+                        "transaction_uuid": transaction_uuid,
+                    },
+                    f,
                 )
 
-                txt_file.write(f"HTML SENTENCE: " f"{item.get('html_sentence')}\n")
+            stitch_result = await stitch_movie(
+                frames,
+                domain,
+                logo_base64=logo_base64,
+                logo_position=logo_position,
+                logo_opacity=logo_opacity,
+                cancel_token=cancel_token,
+                user_id=user_id,
+                status_callback=update_status,
+                db=db
+            )
 
-                txt_file.write(
-                    f"UPDATED HTML SENTENCE: " f"{item.get('updated_html_sentence')}\n"
+            final_video_path = stitch_result["video_path"]
+            tts_cost = stitch_result["tts_cost"]
+
+            with open(status_file, "w", encoding="utf-8") as f:
+                json.dump(
+                    {
+                        "status": "completed",
+                        "filepath": final_video_path,
+                        "filename": os.path.basename(final_video_path),
+                        "ttsCost": tts_cost,
+                    },
+                    f,
                 )
 
-                txt_file.write(f"DOCUMENT NAME: " f"{item.get('document_name')}\n")
+        except Exception as e:
+            with open(status_file, "w", encoding="utf-8") as f:
+                json.dump({"status": "error", "message": str(e)}, f)
 
-                txt_file.write(f"VIEW URL: " f"{item.get('view_url')}\n")
+    # threading.Thread(target=background_stitch, daemon=True).start()
+    asyncio.create_task(background_stitch())
 
-                # txt_file.write(f"\nCONTENT:\n{item['content']}\n")
-                txt_file.write("-" * 100 + "\n\n")
+    return JSONResponse(
+        {
+            "status": "processing",
+            "transaction_uuid": transaction_uuid,
+        },
+        status_code=status.HTTP_202_ACCEPTED,
+    )
 
+
+from src.hls_platform.movie_maker import global_cancel_tokens
+from src.hls_platform.cancel_manager import set_cancel_user_task
+
+@hls_content_factory_router.post('/hls_platform/cancel_stitch_movie')
+async def hls_cancel_stitch_movie(request: Request):
+    token = await request.json()
+    token = token.get('cancel_token')
+    if token:
+        global_cancel_tokens[token] = True
+    return JSONResponse({"status": "cancelled"}, status_code=200)
+
+@hls_content_factory_router.post('/hls_platform/cancel_convert_content')
+async def hls_cancel_convert_content(request: Request):
+    user_id = (await request.json()).get('user_id')
+    if user_id:
+        set_cancel_user_task(user_id, True)
+        return JSONResponse({"status": "cancelled"}, status_code=200)
+    return JSONResponse({"error": "Missing user_id"}, status_code=400)
+
+@hls_content_factory_router.post('/hls_platform/save_stitched_movie')
+async def hls_save_stitched_movie(request: Request, db: AsyncSession = Depends(get_session)):
+    data = await request.json()
+    file_path = data.get('filePath')
+    domain = data.get('domain', 'sales')
+    user_id = data.get('userId')
+    user_name = data.get('userName', 'Unknown User')
+    video_name = data.get('videoName', 'Generated Movie.mp4')
+    project_state = data.get('projectState') # Get frontend state JSON
+    transaction_uuid = data.get('transactionUuid')
+    
+    input_tokens = data.get('inputTokens', 0)
+    output_tokens = data.get('outputTokens', 0)
+    total_cost = data.get('totalCost', 0.0)
+    
+    if not file_path or not user_id:
+        return JSONResponse({"error": "Missing required fields"}, status_code=400)
+
+    try:
+        # If transaction_uuid provided, try to update existing transaction first
+        if transaction_uuid:
+            transaction = await db.execute(select(HLSTransaction).filter(HLSTransaction.uuid == transaction_uuid))
+            transaction = transaction.scalar_one_or_none()
+            if transaction:
+                transaction.output_file_path = os.path.abspath(file_path)
+                transaction.input_tokens = (transaction.input_tokens or 0) + input_tokens
+                transaction.output_tokens = (transaction.output_tokens or 0) + output_tokens
+                transaction.total_cost = (transaction.total_cost or 0.0) + total_cost
                 
+                if project_state:
+                    state_dir = os.path.join(hls_uploads_path, 'transactions', transaction_uuid)
+                    os.makedirs(state_dir, exist_ok=True)
+                    state_file_path = os.path.join(state_dir, 'state.json')
+                    with open(state_file_path, 'w', encoding='utf-8') as f:
+                        json.dump(project_state, f)
+                        
+                await db.commit()
+                return JSONResponse({"status": "success", "transaction_uuid": transaction_uuid}), 200
 
-        print(f"✅ Tagged text file created: {txt_file_path}")
-        print("\n========== FINAL RESULTS ==========")
-        for result in results:
-            print({
-                "claim_id": result.get("claim_id"),
-                "document_name": result.get("document_name"),
-                "uploaded_document_id": result.get("uploaded_document_id"),
-                "uploaded_major_version": result.get("uploaded_major_version"),
-                "uploaded_minor_version": result.get("uploaded_minor_version"),
-                "view_url": result.get("view_url"),
-            })
-        print("==================================")
+        # Fallback to creating a new transaction
+        transaction_uuid = transaction_uuid or str(uuid.uuid4())
+        
+        # Save project state to disk if provided
+        if project_state:
+            state_dir = os.path.join(hls_uploads_path, 'transactions', transaction_uuid)
+            os.makedirs(state_dir, exist_ok=True)
+            state_file_path = os.path.join(state_dir, 'state.json')
+            with open(state_file_path, 'w', encoding='utf-8') as f:
+                json.dump(project_state, f)
+
+        transaction = HLSTransaction(
+            uuid=transaction_uuid,
+            format_type="movie maker",
+            input_file_paths=json.dumps([video_name]),
+            output_file_path=os.path.abspath(file_path),
+            created_by=str(user_id),
+            created_person=str(user_name),
+            domain=domain,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            total_cost=total_cost
+        )
+
+        db.add(transaction)
+        await db.commit()
+
         return {
-            "document_id": document_id,
-            "pdf_path": pdf_path,
-            "txt_file_path": txt_file_path,
-            "results": results,
+            "status": "success",
+            "transaction_uuid": transaction_uuid
         }
 
-    def get_docx_claim_text(
-        self,
-        file_path: str,
-        annotation_text: str,
-    ) -> str | None:
-        """
-        Find the DOCX paragraph containing the annotation text.
-        """
-        if not file_path:
-            print("❌ DOCX file path is empty")
-            return None
-        if not os.path.exists(file_path):
-            print(f"❌ DOCX file does not exist: {file_path}")
-            return None
-        if not annotation_text:
-            print("❌ Annotation text is empty")
-            return None
-        try:
-            from docx import Document
-            document = Document(file_path)
-            normalized_annotation = re.sub(
-                r"\s+",
-                " ",
-                annotation_text.strip(),
-            ).lower()
-            print("\n========== SEARCHING DOCX ==========")
-            print(f"DOCX FILE = {file_path}")
-            print(f"ANNOTATION = {annotation_text}")
-            print("\n========== SEARCH STRING ==========")
-            print(repr(annotation_text))
-            print("===================================")
-            doc = Document(file_path)
-            print("\n========== DOCX PARAGRAPHS ==========")
-            for para in doc.paragraphs:
-                if para.text.strip():
-                    print(repr(para.text))
-            print("=====================================")
-            from difflib import SequenceMatcher
-            best_match = None
-            best_score = 0
-            for paragraph in document.paragraphs:
-                paragraph_text = re.sub(
-                    r"\s+",
-                    " ",
-                    paragraph.text.strip(),
-                )
-                if not paragraph_text:
-                    continue
-                normalized_paragraph = paragraph_text.lower()
-                score = SequenceMatcher(
-                    None,
-                    normalized_annotation,
-                    normalized_paragraph,
-                ).ratio()
-                print(
-                    f"MATCH SCORE = {score:.2f} | {paragraph_text[:100]}"
-                )
-                if score > best_score:
-                    best_score = score
-                    best_match = paragraph_text
-            print(f"BEST SCORE = {best_score}")
-            print(f"BEST MATCH = {best_match}")
-            if best_match:
-                print("✅ DOCX MATCH FOUND")
-                print(f"BEST SCORE = {best_score}")
-                print(f"PARAGRAPH = {best_match}")
-                return best_match
-            print("❌ DOCX MATCH NOT FOUND")
-            return None
-        except Exception as e:
-            print(f"❌ Error searching DOCX: {e}")
-            return None
-    def get_pdf_claim_text(
-        self,
-        file_path: str,
-        annotation_text: str,
-    ):
-        """
-        Find the PDF text block that best matches the annotation text.
-        """
-        if not file_path:
-            print("❌ PDF file path is empty")
-            return None
-        if not os.path.exists(file_path):
-            print(f"❌ PDF file does not exist: {file_path}")
-            return None
-        if not annotation_text:
-            print("❌ Annotation text is empty")
-            return None
-        try:
-            import fitz
-            from difflib import SequenceMatcher
-            document = fitz.open(file_path)
-            normalized_annotation = re.sub(
-                r"\s+",
-                " ",
-                annotation_text.strip(),
-            ).lower()
-            best_match = None
-            best_score = 0
-            print("\n========== SEARCHING PDF ==========")
-            print(f"PDF FILE = {file_path}")
-            print(f"ANNOTATION = {annotation_text}")
-            print("===================================")
-            for page_index in range(len(document)):
-                page = document[page_index]
-                blocks = page.get_text("blocks")
-                for block in blocks:
-                    block_text = block[4].strip()
-                    if not block_text:
-                        continue
-                    normalized_block = re.sub(
-                        r"\s+",
-                        " ",
-                        block_text,
-                    ).lower()
-                    normalized_block = normalized_block.replace(
-                        "&lt;",
-                        "<",
-                    )
-                    normalized_annotation = normalized_annotation.replace(
-                        "&lt;",
-                        "<",
-                    )
-                    score = SequenceMatcher(
-                        None,
-                        normalized_annotation,
-                        normalized_block,
-                    ).ratio()
-                    print(
-                        f"PAGE={page_index + 1} "
-                        f"SCORE={score:.2f} "
-                        f"TEXT={block_text[:120]}"
-                    )
-                    if score > best_score:
-                        best_score = score
-                        best_match = {
-                            "page": page_index,
-                            "rect": fitz.Rect(
-                                block[0],
-                                block[1],
-                                block[2],
-                                block[3],
-                            ),
-                            "text": block_text,
-                        }
-            document.close()
-            print("\n========== PDF BEST MATCH ==========")
-            print(f"BEST SCORE = {best_score}")
-            if best_match:
-                print(f"BEST MATCH = {best_match['text']}")
-            print("====================================")
-            if best_match:
-                print("✅ PDF MATCH FOUND")
-                return best_match
-            print("❌ PDF MATCH NOT FOUND")
-            return None
-        except Exception as e:
-            print(f"❌ Error searching PDF: {e}")
-            return None
-    def get_ppt_claim_text(
-        self,
-        file_path: str,
-        annotation_text: str,
-    ) -> str | None:
-        """
-        Find the PPT text that best matches the annotation text.
-        """
-        if not file_path:
-            print("❌ PPT file path is empty")
-            return None
-        if not os.path.exists(file_path):
-            print(f"❌ PPT file does not exist: {file_path}")
-            return None
-        if not annotation_text:
-            print("❌ Annotation text is empty")
-            return None
-        try:
-            from pptx import Presentation
-            from difflib import SequenceMatcher
-            import re
-            presentation = Presentation(file_path)
-            normalized_annotation = re.sub(
-                r"\s+",
-                " ",
-                annotation_text.strip(),
-            ).lower()
-            best_match = None
-            best_score = 0
-            print("\n========== SEARCHING PPT ==========")
-            print(f"PPT FILE = {file_path}")
-            print(f"ANNOTATION = {annotation_text}")
-            print("===================================")
-            for slide_index, slide in enumerate(presentation.slides, start=1):
-                for shape in slide.shapes:
-                    if not getattr(shape, "has_text_frame", False):
-                        continue
-                    shape_text = shape.text.strip()
-                    if not shape_text:
-                        continue
-                    normalized_shape_text = re.sub(
-                        r"\s+",
-                        " ",
-                        shape_text,
-                    ).lower()
-                    score = SequenceMatcher(
-                        None,
-                        normalized_annotation,
-                        normalized_shape_text,
-                    ).ratio()
-                    print(
-                        f"SLIDE={slide_index} "
-                        f"SCORE={score:.2f} "
-                        f"TEXT={shape_text[:120]}"
-                    )
-                    if score > best_score:
-                        best_score = score
-                        best_match = shape_text
-            print("\n========== PPT BEST MATCH ==========")
-            print(f"BEST SCORE = {best_score}")
-            print(f"BEST MATCH = {best_match}")
-            print("====================================")
-            if best_match:
-                print("✅ PDF MATCH FOUND")
-                print(f"BEST SCORE = {best_score}")
-                print(f"BEST TEXT = {best_match['text']}")
-                return best_match
-            print("❌ PDF MATCH NOT FOUND")
-            return None
-        except Exception as e:
-            print(f"❌ Error searching PPT: {e}")
-            return None
-    def get_html_sentence(
-        self,
-        claim_id: str,
-        annotation_text: str,
-        html_file_path: str,
-    ) -> dict | None:
-        """
-        Find the HTML paragraph that contains the annotation text.
-        Return both plain text and the original HTML code.
-        """
-        if not claim_id:
-            print("⚠️ Skipping annotation because claim_id is empty")
-            return None
+    except Exception as e:
+        await db.rollback()
+        print(f"Failed to save stitched movie transaction: {e}")
+        from fastapi.responses import JSONResponse
 
-        if not annotation_text:
-            print(f"⚠️ Empty annotation text for {claim_id}")
-            return None
+        return JSONResponse(
+            status_code=500,
+            content={"error": str(e)}
+        )
+    
+@hls_content_factory_router.get('/hls_platform/movie_maker/{transaction_uuid}/state')
+async def hls_get_movie_maker_state(transaction_uuid):
+    state_file_path = os.path.join(hls_uploads_path, 'transactions', transaction_uuid, 'state.json')
+    if not os.path.exists(state_file_path):
+        return JSONResponse(
+            status_code=404,
+            content={"error": "State file not found"}
+        )
+        
+    try:
+        with open(state_file_path, 'r', encoding='utf-8') as f:
+            state_data = json.load(f)
+        return JSONResponse(
+            status_code=200,
+            content=state_data
+        )
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={"error": str(e)}
+        )
+    
+@hls_content_factory_router.post('/hls_platform/movie_maker/upload_clip')
+async def hls_upload_movie_clip(request: Request):
+    form = await request.form()
+    file = form.get("file")
 
-        if not os.path.exists(html_file_path):
-            print(f"❌ HTML file does not exist: " f"{html_file_path}")
-            return None
-
-        annotation_text = (
-            annotation_text.replace("+", " + ").replace("(", " ").replace(")", " ")
+    if not file:
+        return JSONResponse(
+            status_code=400,
+            content={"error": "No file part"}
         )
 
-        normalized_annotation = re.sub(r"\s+", " ", annotation_text.lower().strip())
+    if not getattr(file, "filename", None):
+        return JSONResponse(
+            status_code=400,
+            content={"error": "No selected file"}
+        )
+        
+    try:
+        temp_folder = os.path.join(hls_uploads_path, "temp_movie_clips")
+        if not os.path.exists(temp_folder):
+            os.makedirs(temp_folder, exist_ok=True)
+            
+        filename = secure_filename(file.filename)
+        clip_uuid = str(uuid.uuid4())
+        ext = os.path.splitext(filename)[1]
+        if not ext:
+            ext = ".mp4"
+            
+        final_filename = f"{clip_uuid}{ext}"
+        filepath = os.path.abspath(os.path.join(temp_folder, final_filename))
+        
+        with open(filepath, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+        
+        relative_url = f"hls_platform/temp_clips/{final_filename}"
+        return JSONResponse(
+            status_code=200,
+            content={"status": "success", "videoUrl": relative_url, "absolutePath": filepath}
+        )
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return JSONResponse(
+            status_code=500,
+            content={"error": str(e)}
+        )
+    
 
-        try:
+@hls_content_factory_router.get("/hls_platform/temp_clips/{filename}")
+async def hls_temp_clips(filename: str):
+    temp_folder = os.path.join(hls_uploads_path, "temp_movie_clips")
+    file_path = os.path.join(temp_folder, filename)
 
-            with open(html_file_path, "r", encoding="utf-8") as f:
-                html_content = f.read()
+    if not os.path.exists(file_path):
+        raise HTTPException(
+            status_code=404,
+            detail="File not found"
+        )
 
-            soup = BeautifulSoup(html_content, "html.parser")
+    return FileResponse(file_path)
 
-            annotation_words = set(normalized_annotation.split())
 
-            paragraphs = soup.find_all("p")
+@hls_content_factory_router.post("/hls_platform/regenerate_movie_frame")
+async def hls_regenerate_movie_frame(request: Request, db: AsyncSession = Depends(get_session)):
+    data = await request.json()
 
-            for paragraph in paragraphs:
+    transaction_uuid = data.get("transactionUuid")
+    prev_script = data.get("prevScript", "")
+    next_script = data.get("nextScript", "")
+    current_script = data.get("currentScript", "")
+    regenerate_type = data.get("regenerateType", "both")
+    image_base64 = data.get("imageBase64")
+    image_url = data.get("imageUrl")
+    custom_prompt = data.get("customPrompt")
 
-                paragraph_text = paragraph.get_text(separator=" ", strip=True)
+    if not transaction_uuid:
+        return JSONResponse({"error": "No transaction uuid provided"}, status_code=400)
 
-                normalized_paragraph = re.sub(
-                    r"\s+", " ", paragraph_text.lower().strip()
-                )
+    try:
+        doc_path = None
 
-                normalized_paragraph = (
-                    normalized_paragraph.replace("+", " + ")
-                    .replace("(", " ")
-                    .replace(")", " ")
-                )
+        token = None
+        auth_header = request.headers.get("authorization")
+        if auth_header and auth_header.startswith("Bearer "):
+            token = auth_header.split(" ", 1)[1]
 
-                paragraph_words = set(normalized_paragraph.split())
+        user_id = data.get("user_id")
+        if not user_id and token:
+            try:
+                jwt_secret_key = settings.jwt.secret_key
+                decoded = jwt.decode(token, jwt_secret_key, algorithms=["HS256"])
+                sub = decoded.get("sub")
+                if sub:
+                    q = text("SELECT id FROM user_entity WHERE email = :email")
+                    r = db.session.execute(q, {"email": sub}).mappings().fetchone()
+                    if r:
+                        user_id = str(r["id"])
+            except Exception:
+                pass
 
-                overlap = len(annotation_words.intersection(paragraph_words))
+        domain = (
+            data.get("domain")
+            or request.query_params.get("domain")
+            or "sales"
+        ).lower()
 
-                required_overlap = max(3, int(len(annotation_words) * 0.6))
+        new_frame = await regenerate_movie_frame(
+            doc_path,
+            prev_script,
+            next_script,
+            current_script,
+            regenerate_type,
+            image_base64,
+            image_url,
+            custom_prompt,
+            user_id=user_id,
+            domain=domain,
+            db=db,
+        )
 
-                if (
-                    normalized_annotation in normalized_paragraph
-                    or overlap >= required_overlap
-                ):
+        return JSONResponse(new_frame, status_code=200)
 
-                    print(f"✅ Found matching paragraph " f"for {claim_id}")
+    except Exception as e:
+        traceback.print_exc()
+        error_msg = str(e)
+        if "429" in error_msg and "RESOURCE_EXHAUSTED" in error_msg:
+            return JSONResponse(
+                {
+                    "error": "Google Image gen rate limit has been exceeded. Please try again later.",
+                    "isRateLimit": True,
+                },
+                status_code=429,
+            )
 
-                    return {
-                        "html_text": paragraph_text.strip(),
-                        "html_code": str(paragraph),
-                    }
+        return JSONResponse({"error": error_msg}, status_code=500)
 
-            if claim_id == "Claim-000001":
 
-                print("\n=== DEBUG CLAIM-000001 ===")
-                print("ANNOTATION:")
-                print(normalized_annotation)
+@hls_content_factory_router.post('/hls_platform/view_veeva_files')
+async def hls_view_veeva_files(request: Request):
+    domain = await get_domain_param(request)
+    #To Do: Modify the get_connector function to use FASTAPI architecture
+    return get_connector(get_connector_name_by_domain(domain)).download_document()
 
-                print("\nPARAGRAPHS:")
+@hls_content_factory_router.get("/hls_platform/get_all_microsites")
+async def get_all_microsites(
+    request: Request,
+    db: AsyncSession = Depends(get_session),
+):
+    domain = await get_domain_param(request)
+    return await get_all_microsites_service(domain, db)
 
-                for paragraph in paragraphs:
+@hls_content_factory_router.post('/hls_platform/send_microsite_by_id')
+async def hls_send_microsite_by_id(request: Request, db: AsyncSession = Depends(get_session)):
+    #To Do: Modify the send_microsite_by_id_helper function to use FASTAPI architecture
+    return await send_microsite_by_id_helper(request, db)
 
-                    print(paragraph.get_text(separator=" ", strip=True)[:300])
 
-        except Exception as e:
+@hls_content_factory_router.post('/hls_platform/brands/sync')
+async def hls_sync_brands(request: Request, db: AsyncSession = Depends(get_session)):
+    domain = await get_domain_param(request)
+    return await sync_brands_from_connector_helper(domain, db)
+    
+@hls_content_factory_router.post('/hls_platform/brands')
+async def hls_add_brand(request: Request, db: AsyncSession = Depends(get_session)):
+    domain = await get_domain_param(request)
+    return await add_brand_helper(request, domain, db)
+    
+@hls_content_factory_router.post('/hls_platform/brands')
+async def hls_get_all_brands(request: Request, db: AsyncSession = Depends(get_session)):
+    domain = await get_domain_param(request)
+    return await get_all_brands_helper(domain, db)
 
-            print(f"⚠️ Error processing " f"{html_file_path}: {e}")
+@hls_content_factory_router.get('/hls_platform/brands/{brand_id}')
+async def hls_get_brand_by_id(brand_id: str, db: AsyncSession = Depends(get_session)):
+    return await get_brand_by_id_helper(brand_id, db)
 
-        print(f"❌ No matching paragraph found " f"for {claim_id}")
+@hls_content_factory_router.put('/hls_platform/brands/{brand_id}')
+async def hls_edit_brand(brand_id: str, request: Request, db: AsyncSession = Depends(get_session)):
+    domain = await get_domain_param(request)
+    return await edit_brand_helper(request, brand_id, domain, db)
 
-        return None
+@hls_content_factory_router.get('/hls_platform/brand_logo/{logo_path:path}')
+async def hls_get_brand_logo(logo_path: str):
+    return await get_brand_logo_helper(logo_path)
 
-    def html_doc_update(
-        self,
-        html_file_path: str,
-        original_html_code: str,
-        updated_html_code: str,
-        html_text: str = None,
-    ) -> bool:
+@hls_content_factory_router.get('/hls_platform/image_url/{document_path:path}')
+async def hls_get_image_url(document_path: str):
+    return await get_image_url_helper(document_path)
 
-        try:
-            with open(html_file_path, "r", encoding="utf-8") as f:
-                html_content = f.read()
+@hls_content_factory_router.post('/hls_platform/upload_to_veeva')
+async def hls_upload_to_veeva(request: Request):
+    domain = await get_domain_param(request)
+    if domain == "hls":
+        print("Uploading to Promomats...")
+        return await upload_to_promomats_helper(request)
+    return await upload_to_veeva_helper(request)
 
-            # --------------------------------------------------
-            # NO CHANGE DETECTED
-            # --------------------------------------------------
-            if (
-                not updated_html_code
-                or not original_html_code
-                or original_html_code.strip() == updated_html_code.strip()
-            ):
-                print("✅ No HTML changes detected. Skipping update.")
-                return False
+@hls_content_factory_router.post('/hls_platform/push_to_veeva')
+async def hls_push_to_veeva(request: Request, db: AsyncSession = Depends(get_session)):
+    return await push_to_veeva_helper(request, db)
 
-            soup = BeautifulSoup(html_content, "html.parser")
+@hls_content_factory_router.post('/hls_platform/push_to_veeva_workflow')
+async def hls_push_to_veeva_workflow(request: Request, db: AsyncSession = Depends(get_session)):
+    return await push_to_veeva_workflow_helper(request, db)
 
-            target_text = re.sub(r"\s+", " ", (html_text or "").lower().strip())
+@hls_content_factory_router.post('/hls_platform/branding_docs/fetch')
+async def hls_fetch_veeva_docs(request: Request, db: AsyncSession = Depends(get_session)):
+    domain = await get_domain_param(request)
+    return await fetch_veeva_docs_helper(domain, db)
 
-            best_paragraph = None
-            best_score = 0
+@hls_content_factory_router.get('/hls_platform/branding_docs')
+async def hls_get_veeva_docs(request: Request, db: AsyncSession = Depends(get_session)):
+    domain = await get_domain_param(request)
+    return await get_veeva_docs_helper(domain, db)
 
-            # --------------------------------------------------
-            # FIND ACTUAL PARAGRAPH FROM HTML FILE
-            # --------------------------------------------------
-            for paragraph in soup.find_all("p"):
+@hls_content_factory_router.post('/hls_platform/branding_docs')
+async def hls_create_branding_doc(request: Request, db: AsyncSession = Depends(get_session)):
+    domain = await get_domain_param(request)
+    return await create_branding_doc_helper(request, domain, db)
 
-                paragraph_text = paragraph.get_text(separator=" ", strip=True)
+@hls_content_factory_router.put('/hls_platform/branding_docs/{doc_id:int}')
+async def hls_update_veeva_doc(doc_id: int, request: Request, db: AsyncSession = Depends(get_session)):
+    return await update_veeva_doc_helper(doc_id, request, db)
 
-                normalized_paragraph = re.sub(
-                    r"\s+", " ", paragraph_text.lower().strip()
-                )
+@hls_content_factory_router.get('/hls_platform/document_types')
+async def hls_get_document_types(request: Request, db: AsyncSession = Depends(get_session)):
+    domain = await get_domain_param(request)
+    return await get_all_document_types_helper(domain, db)
 
-                score = SequenceMatcher(None, target_text, normalized_paragraph).ratio()
+@hls_content_factory_router.post('/hls_platform/document_types')
+async def hls_add_document_type(request: Request, db: AsyncSession = Depends(get_session)):
+    domain = await get_domain_param(request)
+    return await add_document_type_helper(request, domain, db)
 
-                if score > best_score:
-                    best_score = score
-                    best_paragraph = paragraph
+@hls_content_factory_router.post('/hls_platform/document_types')
+async def hls_add_document_type(request: Request, db: AsyncSession = Depends(get_session)):
+    domain = await get_domain_param(request)
+    return await add_document_type_helper(request, domain, db)
 
-            print(f"BEST MATCH SCORE = {best_score}")
+@hls_content_factory_router.put('/hls_platform/document_types/{type_id:int}')
+async def hls_edit_document_type(type_id: int, request: Request, db: AsyncSession = Depends(get_session)):
+    domain = await get_domain_param(request)
+    return await edit_document_type_helper(request, type_id, domain, db)
 
-            # --------------------------------------------------
-            # STRICT MATCHING
-            # --------------------------------------------------
-            if best_score < 0.95:
-                print(
-                    f"❌ Similarity score too low ({best_score}). " f"Skipping update."
-                )
-                return False
+@hls_content_factory_router.delete('/hls_platform/document_types/{type_id:int}')
+async def hls_delete_document_type(type_id: int, request: Request, db: AsyncSession = Depends(get_session)):
+    domain = await get_domain_param(request)
+    return await delete_document_type_helper(type_id, domain, db)
 
-            # --------------------------------------------------
-            # REPLACE PARAGRAPH SAFELY
-            # --------------------------------------------------
-            replacement_soup = BeautifulSoup(updated_html_code, "html.parser")
+@hls_content_factory_router.get('/hls_platform/markets')
+async def hls_get_markets(request: Request, db: AsyncSession = Depends(get_session)):
+    domain = await get_domain_param(request)
+    return await get_all_markets_helper(domain, db)
 
-            replacement_paragraph = replacement_soup.find("p")
+@hls_content_factory_router.post('/hls_platform/markets')
+async def hls_add_market(request: Request, db: AsyncSession = Depends(get_session)):
+    domain = await get_domain_param(request)
+    return await add_market_helper(request, domain, db)
 
-            if replacement_paragraph is None:
-                print("❌ Updated HTML does not contain a paragraph.")
-                return False
+@hls_content_factory_router.put('/hls_platform/markets/{market_id:int}')
+async def hls_edit_market(market_id: int, request: Request, db: AsyncSession = Depends(get_session)):
+    domain = await get_domain_param(request)
+    return await edit_market_helper(request, market_id, domain, db)
 
-            best_paragraph.replace_with(replacement_paragraph)
+@hls_content_factory_router.delete('/hls_platform/markets/{market_id:int}')
+async def hls_delete_market(market_id: int, request: Request, db: AsyncSession = Depends(get_session)):
+    domain = await get_domain_param(request)
+    return await delete_market_helper(market_id, domain, db)
 
-            with open(html_file_path, "w", encoding="utf-8") as f:
-                f.write(str(soup))
+@hls_content_factory_router.post('/hls_platform/hls_chat')
+async def hls_chat(request: Request, db: AsyncSession = Depends(get_session)):
+    return await hls_chat_helper(request, db)
 
-            print(f"✅ HTML updated successfully " f"(similarity={best_score})")
 
-            return True
+@hls_content_factory_router.get('/hls_platform/chat_history')
+async def hls_chat_history(request: Request, db: AsyncSession = Depends(get_session)):
+    try:
+        domain = await get_domain_param(request)
+        if not domain:
+            raise ValueError("Domain ${domain} is not a valid domain") 
 
-        except Exception as e:
-            print(f"❌ Error updating HTML: {e}")
-            return False
+        # pagination params
+        page = int(request.query_params.get('page', 1))
+        page_size = int(request.query_params.get('pageSize', 8))
+        offset = (max(page, 1) - 1) * page_size
 
-    async def create_rectangle_annotation(
-        self,
-        document_id: str,
-        major_version: int,
-        minor_version: int,
-        claim_record_id: str,
-        page_number: int,
-        x_left: float,
-        y_top: float,
-        x_right: float,
-        y_bottom: float,
-        annotation_text: str = None,
-        updated_annotation_text: str = None,
-        text_page_number: int = None,
-        text_start_index: int = None,
-        text_end_index: int = None,
-    ):
-        try:
-            connector = get_connector("promomats")
+        total_result = await db.execute(select(func.count()).select_from(HLSChatbotHistory).where(HLSChatbotHistory.domain == domain))
+        total = int(total_result.scalar_one() or 0)
 
-            async with AsyncSessionLocal() as db:
-                await connector.load_credentials(db)
+        q = (
+            select(HLSChatbotHistory)
+            .where(HLSChatbotHistory.domain == domain)
+            .order_by(HLSChatbotHistory.timestamp.desc())
+            .offset(offset)
+            .limit(page_size)
+        )
+        result = await db.execute(q)
+        rows = result.scalars().all()
 
-            _, headers, base_url = connector.authenticate()
-            headers["Content-Type"] = "application/json"
-            headers["Accept"] = "application/json"
+        items = []
+        for r in rows:
+            ts = r.timestamp
+            formatted_ts = ts.strftime("%m/%d/%y, %I:%M %p") if ts else None
+            items.append({
+                "id": r.id,
+                "session_uuid": r.session_uuid,
+                "chat_history": r.chat_history,
+                "user_name": r.user_name,
+                "ipaddress": r.ipaddress,
+                "timestamp": formatted_ts,
+                "domain": r.domain,
+                "adverse_event": r.adverse_event,
+            })
 
-            base_url = "https://partnersi-coeus-bridgeview-promomats.veevavault.com"
+        return {
+            "items": items,
+            "page": page,
+            "pageSize": page_size,
+            "total": total,
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
-            annotation_url = f"{base_url}/api/v26.2/objects/documents/annotations/batch"
+@hls_content_factory_router.get('/hls_platform/support_tickets')
+async def get_support_tickets(
+    request: Request,
+    db: AsyncSession = Depends(get_session)
+):
+    try:
+        domain = await get_domain_param(request)
 
-            document_version_id = f"{document_id}_{major_version}_{minor_version}"
+        if not domain:
+            raise ValueError(f"Domain {domain} is not a valid domain")
 
-            print("\n==============================")
-            print("CREATING ANNOTATION")
-            print("==============================")
-            print(f"DOCUMENT VERSION = {document_version_id}")
-            print(f"CLAIM RECORD ID  = {claim_record_id}")
-            print(f"ANNOTATION WILL LINK TO CLAIM = " f"{claim_record_id}")
-            print(f"TEXT PAGE        = {text_page_number}")
-            print(f"TEXT START       = {text_start_index}")
-            print(f"TEXT END         = {text_end_index}")
+        page = int(request.query_params.get('page', 1))
+        page_size = int(request.query_params.get('pageSize', 8))
+        offset = (max(page, 1) - 1) * page_size
 
-            # --------------------------------------------------
-            # Preferred Path : Text-Based Annotation
-            # --------------------------------------------------
-            if (
-                text_page_number is not None
-                and text_start_index is not None
-                and text_end_index is not None
-            ):
+        total_result = await db.execute(
+            select(func.count())
+            .select_from(SupportTicket)
+            .where(SupportTicket.domain == domain)
+        )
 
-                payload = [
-                    {
-                        "document_version_id__sys": document_version_id,
-                        "type__sys": "keyword_link__sys",
-                        "linked_records__sys": [claim_record_id],
-                        "state__sys": "open__sys",
-                        "prevent_bring_forward__sys": False,
-                        "placemark": {
-                            "type__sys": "text__sys",
-                            "page_number__sys": text_page_number,
-                            "text_start_index__sys": text_start_index,
-                            "text_end_index__sys": text_end_index,
-                            "style__sys": "text_link__sys",
-                        },
-                    }
-                ]
+        total = int(total_result.scalar_one() or 0)
 
-                print("✅ USING TEXT-BASED ANNOTATION")
+        q = (
+            select(SupportTicket)
+            .where(SupportTicket.domain == domain)
+            .order_by(SupportTicket.created_at.desc())
+            .offset(offset)
+            .limit(page_size)
+        )
 
+        result = await db.execute(q)
+        rows = result.scalars().all()
+
+        items = []
+
+        for r in rows:
+            items.append({
+                "id": r.id,
+                "ticket_id": r.ticket_id,
+                "user_name": r.user_name,
+                "user_email": r.user_email,
+                "original_question": r.original_question,
+                "issue_description": r.issue_description,
+                "status": r.status,
+                "created_at": r.created_at.strftime("%m/%d/%y, %I:%M %p")
+                if r.created_at else None,
+            })
+
+        return {
+            "items": items,
+            "page": page,
+            "pageSize": page_size,
+            "total": total,
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+@hls_content_factory_router.get('/hls_platform/hello')
+async def hls_hello_world():
+    return {"message": "Hello, World!"}
+
+
+@hls_content_factory_router.post('/hls_platform/local_documents')
+async def hls_upload_local_document(request: Request, db: AsyncSession = Depends(get_session)):
+    """Admin upload for non-Veeva domains (e.g. sales)."""
+    domain = await get_domain_param(request)
+    return await upload_local_document_helper(domain, request, db)
+
+
+#To Do: Modify the process_medaffairs_helper function to use FASTAPI architecture
+@hls_content_factory_router.post('/hls_platform/medaffairs')
+async def hls_process_medaffairs(request: Request, db: AsyncSession = Depends(get_session)):
+    data = await request.json()
+
+    # Validate required fields
+    if not data or 'url' not in data or 'brand_name' not in data:
+        return {"error": "Missing required fields: url, brand_name"}, 400
+
+    return await process_medaffairs_helper(data)
+
+
+
+# ---------------------------------------------------------------------------
+# Backend-orchestrated workflows
+# ---------------------------------------------------------------------------
+
+@hls_content_factory_router.get('/hls_platform/workflows/types')
+async def hls_workflow_types():
+    return {"success": True, "data": list_workflow_types()}
+
+@hls_content_factory_router.post('/hls_platform/workflows/start')
+async def hls_workflow_start(request: Request, db: AsyncSession = Depends(get_session)):
+    data = await request.json()
+    workflow_type_id = data.get('workflow_type_id') or data.get('workflowTypeId')
+    config = data.get('config') or {}
+    user_id = data.get('user_id') or data.get('userId')
+    user_name = data.get('user_name') or data.get('userName')
+    domain = await get_domain_param(request)
+
+    if not workflow_type_id:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "success": False,
+                "error": "workflow_type_id is required"
+            }
+        )
+
+    if ( (not config.get("dataSourceUrl") and workflow_type_id == "1") or not config.get("brandName")):
+        return JSONResponse(
+            status_code=400,
+            content={
+                "success": False,
+                "error": "config.dataSourceUrl and config.brandName are required"
+            }
+        )
+
+    try:
+        workflow_run_id = await start_workflow_run(
+            workflow_type_id=workflow_type_id,
+            config=config,
+            user_id=user_id,
+            user_name=user_name,
+            domain=domain,
+            db=db,
+            async_session_factory=AsyncSessionLocal,
+        )
+
+    except ValueError as e:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "success": False,
+                "error": str(e)
+            }
+        )
+
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={
+                "success": False,
+                "error": str(e)
+            }
+        )
+
+    return JSONResponse(
+        status_code=200,
+        content={
+            "success": True,
+            "data": {
+                "workflow_run_id": workflow_run_id,
+                "status": "in_progress"
+            }
+        }
+    )
+
+
+@hls_content_factory_router.get("/hls_platform/workflows/{workflow_run_id}/status")
+async def hls_workflow_status(workflow_run_id: str, db: AsyncSession = Depends(get_session)):
+    run = await get_workflow_run(workflow_run_id, db)
+
+    if run is None:
+        return JSONResponse(
+            status_code=404,
+            content={
+                "success": False,
+                "error": "workflow_run_id not found"
+            }
+        )
+
+
+    return JSONResponse(
+        status_code=200,
+        content={
+            "success": True,
+            "data": run
+        }
+    )
+
+@hls_content_factory_router.post("/hls_platform/split_video_scenes")
+async def hls_split_video_scenes(request: Request):
+    data = await request.json()
+    domain = await get_domain_param(request)
+
+    video_url = data.get("videoUrl")
+
+    if not video_url:
+        return JSONResponse(status_code=400, content={"error": "No videoUrl provided"})
+
+    try:
+        chunks = split_video_into_scenes(video_url, domain=domain)
+
+        return {"status": "success", "chunks": chunks}
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+@hls_content_factory_router.post('/hls_platform/split_video_at_timestamps')
+async def hls_split_video_at_timestamps(request: Request):
+    data = await request.json()
+    video_url = data.get('videoUrl')
+    timestamps = data.get('timestamps', [])
+    duration = data.get('duration')
+    
+    if not video_url or not isinstance(timestamps, list) or duration is None:
+        return JSONResponse(status_code=400, content={"error": "Missing parameters"})
+        
+    try:
+        # Sort and ensure unique timestamps within bounds
+        valid_timestamps = sorted(list(set([t for t in timestamps if 0 < t < duration])))
+        
+        # Build segments
+        segments = []
+        last_t = 0
+        for t in valid_timestamps:
+            segments.append((last_t, t))
+            last_t = t
+        segments.append((last_t, duration))
+        
+        chunks = []
+        for start_t, end_t in segments:
+            # Only trim if segment is > 0.1s to avoid errors
+            if end_t - start_t > 0.1:
+                chunk_url = trim_video_clip(video_url, float(start_t), float(end_t))
+                chunks.append(chunk_url)
+                
+        return JSONResponse(status_code=200, content={"status": "success", "chunks": chunks})
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return JSONResponse(status_code=500, content={"error": str(e)})
+    
+@hls_content_factory_router.post('/hls_platform/trim_video_clip')
+async def hls_trim_video_clip(request: Request):
+    data = await request.json()
+    video_url = data.get('videoUrl')
+    start_time = data.get('startTime')
+    end_time = data.get('endTime')
+    if not video_url or start_time is None or end_time is None:
+        return JSONResponse(status_code=400, content={"error": "Missing parameters"}) 
+
+    try:
+        new_url = trim_video_clip(video_url, float(start_time), float(end_time))
+        return JSONResponse(status_code=200, content={"status": "success", "videoUrl": new_url})
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+
+@hls_content_factory_router.post('/hls_platform/transcribe_video')
+async def hls_transcribe_video(request: Request):
+    data = await request.json()
+    domain = await get_domain_param(request)
+    video_url = data.get('videoUrl')
+    if not video_url:
+        return JSONResponse(status_code=400, content={"error": "Missing parameters"})
+        
+    try:
+        result = transcribe_video_clip(video_url, domain=domain)
+        return JSONResponse(status_code=200, content={"status": "success", "transcription": result["transcription"], "input_tokens": result["input_tokens"], "output_tokens": result["output_tokens"], "total_cost": result["total_cost"]})
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+@hls_content_factory_router.post('/hls_platform/extract_scene_frames')
+async def hls_extract_scene_frames(request: Request):
+    data = await request.json()
+    chunks = data.get('chunks', [])
+    if not chunks:
+        return JSONResponse(status_code=400, content={"error": "No chunks provided"})
+        
+    try:
+        frames = []
+        for chunk in chunks:
+            image_url = extract_frame_from_clip(chunk)
+            domain = get_domain_param(request)
+            result = transcribe_video_clip(chunk, domain=domain)
+            script = result["transcription"]
+            
+            frames.append({
+                "imageUrl": image_url,
+                "script": script,
+                "type": "generated",
+                "videoUrl": chunk,
+                "input_tokens": result["input_tokens"],
+                "output_tokens": result["output_tokens"],
+                "total_cost": result["total_cost"]
+            })
+            
+        return JSONResponse(status_code=200, content={"status": "success", "frames": frames})
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+@hls_content_factory_router.post('/hls_platform/inpaint_frame')
+async def hls_inpaint_frame(request: Request, db: AsyncSession = Depends(get_session)):
+    data = await request.json()
+    image_base64 = data.get('imageBase64')
+    image_url = data.get('imageUrl')
+    target_text = data.get('targetText')
+    new_text = data.get('newText')
+    
+    if not (image_base64 or image_url) or not target_text or not new_text:
+        return JSONResponse(status_code=400, content={"error": "Missing parameters"})
+        
+    try:
+        if not image_base64 and image_url:
+            # Convert imageUrl to base64
+            src_path = os.path.join(hls_uploads_path, image_url.lstrip('/'))
+            if os.path.exists(src_path):
+                with open(src_path, "rb") as img_file:
+                    image_base64 = base64.b64encode(img_file.read()).decode('utf-8')
             else:
+                return JSONResponse(status_code=404, content={"error": "Source image not found"})
+            if os.path.exists(src_path):
+                with open(src_path, "rb") as img_file:
+                    image_base64 = base64.b64encode(img_file.read()).decode('utf-8')
+            else:
+                return JSONResponse(status_code=404, content={"error": "Source image not found"})
 
-                width = x_right - x_left
-                height = y_bottom - y_top
+        domain = await get_domain_param(request)
 
-                payload = [
-                    {
-                        "document_version_id__sys": document_version_id,
-                        "type__sys": "keyword_link__sys",
-                        "linked_records__sys": [claim_record_id],
-                        "state__sys": "open__sys",
-                        "prevent_bring_forward__sys": False,
-                        "placemark": {
-                            "type__sys": "rectangle__sys",
-                            "page_number__sys": page_number,
-                            "x_coordinate__sys": x_left,
-                            "y_coordinate__sys": y_top,
-                            "width__sys": width,
-                            "height__sys": height,
-                            "style__sys": "rectangle_solid__sys",
-                        },
-                    }
-                ]
-
-                print("⚠️ FALLBACK TO RECTANGLE ANNOTATION")
-
-            print("\nPAYLOAD:")
-            print(json.dumps(payload, indent=2))
-
-            response = requests.post(
-                annotation_url,
-                headers=headers,
-                json=payload,
-                verify=False,
-                timeout=120,
-            )
-
-            print(f"ANNOTATION STATUS = {response.status_code}")
-
+        # Extract user_id for cost tracking (similar logic as other endpoints)
+        token = None
+        auth_header = request.headers.get('Authorization')
+        if auth_header and auth_header.startswith('Bearer '):
+            token = auth_header.split(' ', 1)[1]
+            
+        user_id = data.get('user_id')
+        if not user_id and token:
+            import jwt as pyjwt
             try:
-                print(json.dumps(response.json(), indent=2))
+                jwt_secret_key = settings.jwt.secret_key
+                decoded = pyjwt.decode(token, jwt_secret_key, algorithms=["HS256"])
+                sub = decoded.get('sub')
+                if sub:
+                    from sqlalchemy import text
+
+                    q = text("SELECT id FROM user_entity WHERE email = :email")
+                    result = await db.execute(q, {"email": sub})
+                    r = result.mappings().first()
+                    if r:
+                        user_id = str(r["id"])
             except Exception:
-                print(response.text)
+                pass
+                
+        result = inpaint_movie_frame(image_base64, target_text, new_text, user_id=user_id, domain=domain)
+        if "error" in result:
+            return JSONResponse(status_code=500, content=result)
+        return JSONResponse(status_code=200, content=result)
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return JSONResponse(status_code=500, content={"error": str(e)})      
 
-            return response.json()
+@hls_content_factory_router.get('/hls_platform/download_movie_image/{filename}')
+async def download_movie_image(filename: str):
+    folder = os.path.join(hls_uploads_path, "movie_maker_images")
+    file_path = os.path.join(folder, filename)
+    
+    if not os.path.exists(file_path):
+        raise HTTPException(status_code=404, detail="File not found")
+    
+    return FileResponse(file_path)
 
-        except Exception as e:
-            print(f"❌ create_rectangle_annotation failed: {e}")
-            return None
+#To harvest claims from Promomats for a particular brand and create them in promomats for a particular brand, we will use the following endpoints. The first endpoint will harvest claims from Promomats and the second endpoint will create claims in Promomats.
+@hls_content_factory_router.post('/hls_platform/harvest_claims')
+async def hls_harvest_claims(request: Request, db: AsyncSession = Depends(get_session)):
+    return await harvest_claim_helper(request, db)
 
-    async def upload_updated_document_and_migrate_annotations(
-        self,
-        document_id: str,
-        updated_file_path: str,
-        source_major: int = 0,
-        source_minor: int = 1,
-        old_claim_record_id: str = None,
-    ):
-        try:
-            print("\n===================================================")
-            print("UPLOAD UPDATED DOCUMENT TO VEEVA")
-            print("===================================================")
+@hls_content_factory_router.post('/hls_platform/create_claim_promomats')
+async def hls_create_claim_promomats(request: Request, db: AsyncSession = Depends(get_session)):
+    return await create_claim_promomats_helper(request, db)
 
-            connector = get_connector("promomats")
+@hls_content_factory_router.get("/hls_platform/promomats/claims")
+async def hls_get_promomats_claims(
+    brand_id: str = "",
+    db: AsyncSession = Depends(get_session),
+):
+    try:
+        connector = get_connector("promomats")
 
-            async with AsyncSessionLocal() as db:
-                await connector.load_credentials(db)
+        await connector.load_credentials(db)
 
-            _, headers, base_url = connector.authenticate()
+        return connector.get_claims(brand_id)
 
-            print(f"📄 Document ID : {document_id}")
-            print(f"📄 File Path   : {updated_file_path}")
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={"error": str(e)}
+        )
 
-            # ==========================================================
-            # STEP 1 : Upload Updated HTML As New Version
-            # ==========================================================
+@hls_content_factory_router.get("/hls_platform/promomats/claims/{claim_id}/relevant-docs")
+async def hls_get_relevant_docs_for_claim(
+    claim_id: str,
+    db: AsyncSession = Depends(get_session),
+):
+    try:
+        connector = get_connector("promomats")
 
-            version_url = (
-                f"{base_url}/objects/documents/{document_id}"
-                f"?createDraft=uploadedContent"
+        await connector.load_credentials(db)
+
+        return connector.get_relevant_docs_for_claim(claim_id)
+
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={"error": str(e)}
+        )
+
+@hls_content_factory_router.get(
+    "/hls_platform/promomats/auto-update-progress/{task_id}"
+)
+async def get_auto_update_progress(task_id: str):
+
+    if task_id not in AUTO_UPDATE_PROGRESS:
+        return {
+            "status": "NOT_FOUND"
+        }
+
+    return AUTO_UPDATE_PROGRESS[task_id] 
+
+@hls_content_factory_router.get(
+    "/hls_platform/promomats/auto-update-result/{task_id}"
+)
+async def get_auto_update_result(task_id: str):
+
+    if task_id not in AUTO_UPDATE_RESULTS:
+
+        return {
+            "status": "PENDING"
+        }
+
+    return AUTO_UPDATE_RESULTS[task_id]
+
+# ===========================================================================
+# SNIPPET 2 OF 2: WORKER ORCHESTRATION PIPELINE ENGINE WITH ALL 15 STAGES
+# ===========================================================================
+import asyncio
+import traceback
+
+async def run_auto_update_background_task(
+    task_id: str,
+    claim_id: str,
+    match_text: str,
+):
+    from src.hls_platform.claim_annotations.auto_update_agent import AutoUpdateAgent
+    completed_steps = []
+
+    try:
+        # 🚀 Upgraded helper to space out early stages so checkboxes tick one-by-one
+        # 🚀 Upgraded helper to space out early stages so checkboxes tick one-by-one
+        async def mark_step(step_name: str):
+            completed_steps.append(step_name)
+            update_auto_update_progress(
+                task_id=task_id,
+                completed_steps=completed_steps.copy(),
+                current_step=step_name,
             )
+            await asyncio.sleep(0.5)  # 🎯 Delays for half a second to let React poll smoothly
 
-            with open(updated_file_path, "rb") as file_obj:
+        async with AsyncSessionLocal() as db:
+            connector = get_connector("promomats")
+            await connector.load_credentials(db)
 
-                files = {
-                    "file": (
-                        os.path.basename(updated_file_path),
-                        file_obj,
-                    )
-                }
+            old_claim_text = None
+            target_claim_name = None
 
-                upload_response = requests.post(
-                    version_url,
-                    headers=headers,
-                    files=files,
-                    verify=False,
-                    timeout=120,
+            claims_response = connector.get_claims()
+            for claim in claims_response.get("claims", []):
+                if claim.get("id") == claim_id:
+                    old_claim_text = claim.get("match_text")
+                    target_claim_name = claim.get("name")
+                    break
+
+            print(f"TARGET CLAIM NAME = {target_claim_name}")
+            print(f"OLD CLAIM = {old_claim_text}")
+            new_claim = match_text
+            print(f"NEW CLAIM = {new_claim}")
+
+            # ==========================================================
+            # STAGES 1 - 5: CLAIM LIFECYCLE MANAGEMENT
+            # ==========================================================
+            print("\n=== AUTO UPDATE CLAIM LIFECYCLE START ===")
+            claim_details = connector.get_claim_details(claim_id)
+            print("CLAIM DETAILS =", claim_details)
+
+            object_type_id = claim_details.get("object_type__v")
+            product_id = claim_details.get("product__v")
+            country_id = claim_details.get("country__v")
+            source_approval_document = claim_details.get("source_approval_document__v")
+            source_approval_document_unbound = claim_details.get("source_approval_document_unbound__v")
+            source_text_asset = claim_details.get("source_text_asset__v")
+            link_target_id = connector.get_link_target_id(claim_id)
+
+            # Stage 1: Create New Claim
+            target_new_claim_id = connector.create_new_claim(
+                claim_text=new_claim,
+                object_type_id=object_type_id,
+                product_id=product_id,
+                country_id=country_id,
+                source_approval_document=source_approval_document,
+                source_approval_document_unbound=source_approval_document_unbound,
+                source_text_asset=source_text_asset,
+            )
+            await mark_step("Create New Claim")
+
+            # Stage 2: Create Claim Relationship
+            connector.create_claim_relationship(
+                claim_id=target_new_claim_id,
+                link_target_id=link_target_id,
+            )
+            await mark_step("Create Claim Relationship")
+
+            # Stage 3: Add Reference To New Claim
+            await mark_step("Add Reference To New Claim")
+
+            # Stage 4: Withdraw Old Claim
+            connector.withdraw_claim(claim_id)
+            await mark_step("Withdraw Old Claim")
+
+            # Stage 5: Approve New Claim
+            connector.approve_claim(target_new_claim_id)
+            await mark_step("Approve New Claim")
+
+            # ==========================================================
+            # STAGES 6 - 8: RELEVANT DOWNLOADS AND PARSING MATCHES
+            # ==========================================================
+            # Stage 6: Download Relevant Documents
+            download_result = await connector.download_relevant_docs_for_claim(
+                db=db,
+                claim_id=claim_id
+            )
+            await mark_step("Download Relevant Documents")
+
+            source_files = download_result.get("source_files", [])
+            source_file_lookup = {
+                item["document_id"]: item
+                for item in source_files
+            }
+
+            pdf_downloaded_files = download_result.get("pdf_downloaded_files", [])
+            tagged_text_results = []
+            updated_documents = []
+            doc_version_map = {}
+
+            if download_result and isinstance(download_result.get("documents"), list):
+                for doc in download_result.get("documents", []):
+                    doc_key = doc.get("document_id") or doc.get("id")
+                    if doc_key:
+                        doc_version_map[str(doc_key)] = (
+                            doc.get("major_version"),
+                            doc.get("minor_version"),
+                        )
+
+            # Stage 7: Extract PDF Annotations
+            await mark_step("Extract PDF Annotations")
+
+            # Stage 8: Match Content In HTML
+            await mark_step("Match Content In HTML")
+
+            # ==========================================================
+            # STAGES 9 - 13: ASSET GENERATION / UPDATE DRAFTS LOOP
+            # ==========================================================
+            for index, pdf_info in enumerate(pdf_downloaded_files):
+                document_id = pdf_info.get("document_id")
+                document_name = pdf_info.get("document_name")
+                pdf_path = pdf_info.get("pdf_path")
+
+                verified_major, verified_minor = doc_version_map.get(document_id, ("0", "1"))
+                orig_major = int(verified_major) if str(verified_major).isdigit() else 0
+                orig_minor = int(verified_minor) if str(verified_minor).isdigit() else 1
+
+                print(f"📄 Content migration loop for document {document_id}")
+
+                print(f"📄 Extracting tagged text for document {document_id}")
+                source_file_info = source_file_lookup.get(
+                document_id,
+                {}
+                )
+                source_file_path = source_file_info.get(
+                "file_path"
+                )
+                print("\n========== SOURCE FILE INFO ==========")
+                print(source_file_info)
+                print(f"SOURCE FILE PATH = {source_file_path}")
+                print("======================================")
+
+                source_filename = source_file_info.get(
+                "filename"
+                )
+                print(
+                f"SOURCE FILE = {source_file_path}"
+                )
+                tagged_result = await AutoUpdateAgent().get_tagged_text_from_pdf(
+                    document_id=document_id,
+                    document_name=document_name,
+                    major_version=orig_major,
+                    minor_version=orig_minor,
+                    pdf_path=pdf_path,
+                    claim_id=target_claim_name,
+                    old_claim=old_claim_text,
+                    new_claim=new_claim,
+                    target_new_claim_id=target_new_claim_id,
+                    task_id=task_id,
+                    source_file_path=source_file_path,
                 )
 
-            print(f"Upload Status = {upload_response.status_code}")
+                if tagged_result:
+                    tagged_text_results.append(tagged_result)
+                    for result in tagged_result.get("results", []):
+                        uploaded_id = result.get("uploaded_document_id")
+                        curr_major = result.get("uploaded_major_version")
+                        curr_minor = result.get("uploaded_minor_version")
 
-            try:
-                upload_json = upload_response.json()
-                print(json.dumps(upload_json, indent=2))
-            except Exception:
-                print("❌ Upload response is not JSON")
-                print(upload_response.text)
+                        if uploaded_id and curr_major is not None and curr_minor is not None:
+                            compare_major, compare_minor = connector.find_latest_existing_predecessor(
+                                document_id=uploaded_id,
+                                current_major=int(curr_major),
+                                current_minor=int(curr_minor),
+                            )
 
-                return {"success": False, "error": "Upload response is not JSON"}
+                            compare_result = connector.get_document_compare_url(
+                                document_id=uploaded_id,
+                                current_major=int(curr_major),
+                                current_minor=int(curr_minor),
+                                compare_major=compare_major,
+                                compare_minor=compare_minor,
+                            )
 
-            if (
-                upload_response.status_code not in [200, 201]
-                or upload_json.get("responseStatus") != "SUCCESS"
-            ):
-                print("❌ Upload Failed")
+                            updated_documents.append({
+                                "document_name": result.get("document_name"),
+                                "document_id": str(uploaded_id), # 🎯 FIXED: Explicitly sanitize to string configuration
+                                "major_version": curr_major,
+                                "minor_version": curr_minor,
+                                "view_url": compare_result.get("view_url"),
+                            })
 
-                return {"success": False, "error": "Upload Failed"}
-
-            major = upload_json.get("major_version_number__v", 0)
-            minor = upload_json.get("minor_version_number__v", 0)
-
-            print(f"\n✅ New Version Created : {major}.{minor}")
+            # Sequentially update progress for pipeline completion states
+            await mark_step("Generate Updated Content")
+            await mark_step("Apply Document Updates")
+            await mark_step("Upload Draft Documents")
+            await mark_step("Migrate Claim Annotations")
+            await mark_step("Remove Legacy Annotations")
 
             # ==========================================================
-            # STEP 2 : Wait For Draft Creation
+            # STAGES 14 - 15: TRANSACTION SAVING & COMPLETE
             # ==========================================================
-
-            print("\n⏳ Waiting 10 seconds...")
-            await asyncio.sleep(10)
-
-            # ==========================================================
-            # STEP 3 : BRING FORWARD ANNOTATIONS
-            # ==========================================================
-
-            print(
-                f"\n📥 Copying annotations "
-                f"V{source_major}.{source_minor} "
-                f"→ "
-                f"V{major}.{minor}"
+            transaction_uuid = str(uuid.uuid4())
+            history_record = HLSHarvestedClaim(
+                transaction_uuid=transaction_uuid,
+                documents={
+                    "updated_documents": updated_documents,
+                    "claim_id": claim_id,
+                    "new_claim_id": target_new_claim_id,
+                    "claim_name": target_claim_name,
+                    "old_claim": old_claim_text,
+                    "new_claim": new_claim,
+                    "success": True,
+                },
+                # 🎯 FIXED: Persist strict unique file identities rather than variable human name descriptors
+                source_documents=[f"{doc.get('document_id')}.html" for doc in updated_documents],
+                brand_name="Auto Update",
+                domain="hls_autoupdate",
+                uuid=str(uuid.uuid4()),
+                claims=new_claim,
+                is_pushed_to_promomats=False,
             )
+            db.add(history_record)
+            await db.commit()
+            await mark_step("Save Update History")
 
-            vault_base_url = base_url.split("/api/")[0]
+            await mark_step("Complete")
 
-            bfa_url = f"{vault_base_url}/ui/bfa/execute"
+            # 🚀 ROOT CAUSE FIX: Query fresh metadata for the replacement claim to catch its real name code
+            new_claim_details = connector.get_claim_details(target_new_claim_id)
+            actual_new_claim_name = new_claim_details.get("name__v") or new_claim_details.get("name") or "N/A"
 
-            payload = {
-                "docId": str(document_id),
-                "majorFrom": str(source_major),
-                "minorFrom": str(source_minor),
-                "majorTo": str(major),
-                "minorTo": str(minor),
-                "lineenabled": "true",
-                "linkenabled": "true",
-                "noteenabled": "true",
-                "anchorenabled": "true",
-                "resolvednoteenabled": "false",
-                "autolinkenabled": "false",
-                "noPageLevel": "true",
-                # "noDuplicate": "true",
+            AUTO_UPDATE_RESULTS[task_id] = {
+                "status": "SUCCESS",
+                "old_claim": {
+                    "claim_id": claim_id,
+                    "claim_name": target_claim_name or "N/A",
+                    "claim_text": old_claim_text or "N/A"
+                },
+                "new_claim": {
+                    "claim_id": target_new_claim_id,
+                    "claim_name": actual_new_claim_name, # 🎯 FIXED: Displays the actual new claim name string perfectly!
+                    "claim_text": new_claim
+                },
+                "updated_documents": updated_documents
             }
 
-            bfa_headers = headers.copy()
-            bfa_headers["X-Requested-With"] = "XMLHttpRequest"
-            bfa_headers["Content-Type"] = "application/x-www-form-urlencoded"
 
-            response = requests.post(
-                bfa_url,
-                headers=bfa_headers,
-                data=payload,
-                verify=False,
-                timeout=120,
+    except Exception as e:
+        print(f"❌ Crash on tracking workflow worker thread: {traceback.format_exc()}")
+        AUTO_UPDATE_RESULTS[task_id] = {
+            "status": "ERROR",
+            "error": str(e),
+            "traceback": traceback.format_exc()
+        }
+
+
+@hls_content_factory_router.put("/hls_platform/promomats/claims/{claim_id}")
+async def hls_update_claim(
+    claim_id: str,
+    payload: UpdateClaimRequest,
+    background_tasks: BackgroundTasks,
+):
+    try:
+        # 1. Generate an atomic task token unique to this session execution request
+        task_id = str(uuid.uuid4())
+        
+        # 2. Establish initial baseline entry metrics for the UI tracking monitors
+        AUTO_UPDATE_PROGRESS[task_id] = {
+            "task_id": task_id,
+            "current_step": "Initializing Workflow",
+            "completed_steps": []
+        }
+        
+        # 3. Offload all the heavy, synchronous processing steps to background tasks
+        background_tasks.add_task(
+            run_auto_update_background_task,
+            task_id=task_id,
+            claim_id=claim_id,
+            match_text=payload.match_text
+        )
+        
+        # 4. Instantly reply to prevent browser transaction request timeouts
+        return {
+            "status": "STARTED",
+            "task_id": task_id
+        }
+
+    except Exception as e:
+        print(f"❌ Failed to kick off background update job pipeline: {traceback.format_exc()}")
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": str(e),
+                "traceback": traceback.format_exc(),
+            },
+        )
+
+
+
+@hls_content_factory_router.get(
+    "/promomats/document-compare-url"
+)
+async def get_document_compare_url(
+    document_id: str,
+    current_major: int,       # 🚀 FIXED: Captures the new version number from the client
+    current_minor: int,       # 🚀 FIXED: Captures the new version number from the client
+    compare_major: int,       # 🚀 FIXED: Explicit live target version parameter
+    compare_minor: int,       # 🚀 FIXED: Explicit live target version parameter
+):
+    connector = get_connector("promomats")
+
+    async with AsyncSessionLocal() as db:
+        await connector.load_credentials(db)
+
+    # 🎯 Forwarding all 4 parameters forward safely to bridge version deletion gaps (e.g., V11 to V9)
+    return connector.get_document_compare_url(
+        document_id=document_id,
+        current_major=current_major,
+        current_minor=current_minor,
+        compare_major=compare_major,
+        compare_minor=compare_minor
+    )
+
+
+@hls_content_factory_router.post('/hls_platform/annotations/autotag')
+async def hls_autotag_document(request: Request, db: AsyncSession = Depends(get_session)):
+    """
+    Auto-tag a document with claims using semantic matching.
+    """
+    return await autotag_document_helper(request, db)
+
+@hls_content_factory_router.post('/hls_platform/annotations/autotag_from_existing')
+async def hls_autotag_from_existing(request: Request, db: AsyncSession = Depends(get_session)):
+    """
+    Auto-tag a document with pre-matched claims.
+    
+    Expected request body:
+    {
+        "document_id": "12345_0_1",
+        "file": <binary file content>,
+        "claims_match": {
+            "V1W000000001001": "matched text from claim 1",
+            "V1W000000001002": "matched text from claim 2"
+        },
+        "connector_type": "promomats"
+    }
+    
+    Returns:
+    {
+        "success": true,
+        "matches_found": 2,
+        "annotations_submitted": 2,
+        "matches": [...],
+        "veeva_response": {...}
+    }
+    """
+    try:
+        # Parse request
+        form_data = await request.form()
+        document_id_version = form_data.get('document_id')
+        connector_type = form_data.get('connector_type', 'promomats')
+        claims_match_json = form_data.get('claims_match')
+        file = form_data.get('file')
+        
+        if not document_id_version:
+            return JSONResponse(
+                status_code=400,
+                content={"error": "document_id is required"}
+            )
+        
+        if not claims_match_json:
+            return JSONResponse(
+                status_code=400,
+                content={"error": "claims_match is required"}
+            )
+        
+        if not file or file.filename == '':
+            return JSONResponse(
+                status_code=400,
+                content={"error": "Invalid file"}
+            )
+        
+        # Parse claims_match JSON
+        try:
+            claims_match_dict = json.loads(claims_match_json)
+            if not isinstance(claims_match_dict, dict):
+                raise ValueError("claims_match must be a dict")
+        except json.JSONDecodeError as e:
+            return JSONResponse(
+                status_code=400,
+                content={"error": f"Invalid claims_match JSON: {str(e)}"}
             )
 
-            print(f"BFA Status = {response.status_code}")
+        autotag_helper = AutotagFromExistingHelper()
+        result = await autotag_helper.process_autotag_from_existing_request(
+            uploaded_file=file,
+            document_id_version=document_id_version,
+            claims_match_dict=claims_match_dict,
+            connector_type=connector_type,
+            db=db,
+        )
 
-            try:
-                print(json.dumps(response.json(), indent=2))
-            except Exception:
-                print(response.text)
+        return JSONResponse(status_code=200 if result.get('success') else 500, content=result)
+    
+    except Exception as e:
+        print(f"❌ Error in autotag_from_existing endpoint: {traceback.format_exc()}")
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": str(e),
+                "traceback": traceback.format_exc()
+            }
+        )
 
-            print(
-                f"\n✅ Successfully uploaded and migrated annotations "
-                f"for document {document_id}"
-            )
-
-            return {
+@hls_content_factory_router.post('/hls_platform/sync_images')
+async def hls_sync_images(request: Request, db: AsyncSession = Depends(get_session)):
+    try:
+        result = await ApprovedImagePhashSyncService().sync_missing_image_phashes()
+        return JSONResponse(
+            status_code=200,
+            content={
                 "success": True,
-                "document_id": document_id,
-                "major_version": major,
-                "minor_version": minor,
-            }
-
-        except Exception as e:
-
-            print(
-                f"\n❌ upload_updated_document_and_migrate_annotations " f"failed: {e}"
-            )
-
-            return {
+                "data": result,
+            },
+        )
+    except Exception as e:
+        logger.error(f"❌ Error syncing approved images: {traceback.format_exc()}")
+        return JSONResponse(
+            status_code=500,
+            content={
                 "success": False,
                 "error": str(e),
-            }
+                "traceback": traceback.format_exc(),
+            },
+        )
+
+@hls_content_factory_router.get("/hls_platform/not_autotagged_documents")
+async def get_not_autotagged_veeva_files(
+    request: Request,
+    db: AsyncSession = Depends(get_session),
+):
+    try:
+        return await get_not_autotagged_files(request, db)
+
+    except ValueError as ve:
+        raise HTTPException(status_code=400, detail=str(ve))
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
