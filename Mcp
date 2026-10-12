@@ -1,0 +1,3 @@
+curl -u "USERNAME:PASSWORD" \
+  -H "Accept: application/json" \
+  "https://YOUR-INSTANCE.service-now.com/api/now/table/incident?sysparm_limit=1"
