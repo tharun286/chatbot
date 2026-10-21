@@ -1,0 +1,138 @@
+[
+    {
+        "id": 248891,
+        "apiName": "gemini 2.5 flash",
+        "description": "gemini model",
+        "type": "Gemini",
+        "configEnabled": true,
+        "default": null
+    },
+    {
+        "id": 248876,
+        "apiName": "ollama gemma3:4b",
+        "description": "gemma3:4b",
+        "type": "Ollama",
+        "configEnabled": true,
+        "default": null
+    },
+    {
+        "id": 248872,
+        "apiName": "ollama gemma4:e2b",
+        "description": "gemma4:e2b",
+        "type": "Ollama",
+        "configEnabled": true,
+        "default": null
+    },
+    {
+        "id": 248871,
+        "apiName": "ollama gemma4:e4b",
+        "description": "gemma4:e4b",
+        "type": "Ollama",
+        "configEnabled": true,
+        "default": null
+    },
+    {
+        "id": 248870,
+        "apiName": "ollama qwen3.5:4b",
+        "description": "qwen3.5:4b",
+        "type": "Ollama",
+        "configEnabled": true,
+        "default": null
+    },
+    {
+        "id": 248869,
+        "apiName": "ollama-qwen2.5-coder:7b",
+        "description": "qwen2.5-coder:7b",
+        "type": "Ollama",
+        "configEnabled": true,
+        "default": null
+    },
+    {
+        "id": 248868,
+        "apiName": "ollama-gemma4:e2b",
+        "description": "ollama-gemma4:e2b",
+        "type": "Ollama",
+        "configEnabled": true,
+        "default": null
+    },
+    {
+        "id": 248867,
+        "apiName": "ollama-gemma4",
+        "description": "gemma4:e4b",
+        "type": "Ollama",
+        "configEnabled": true,
+        "default": null
+    },
+    {
+        "id": 248815,
+        "apiName": "gpt-5-mini",
+        "description": "gpt-5-mini",
+        "type": "Azure-OpenAI",
+        "configEnabled": true,
+        "default": false
+    },
+    {
+        "id": 248315,
+        "apiName": "gpt-4o-mini-new",
+        "description": "gpt-4o-mini-new",
+        "type": "Azure-OpenAI",
+        "configEnabled": true,
+        "default": false
+    },
+    {
+        "id": 247670,
+        "apiName": "gpt-4o-mini-batch-developer",
+        "description": "gpt-4o-mini-batch-developer",
+        "type": "Azure-OpenAI",
+        "configEnabled": true,
+        "default": null
+    },
+    {
+        "id": 247316,
+        "apiName": "gpt-4o-mini-Developers",
+        "description": "gpt-4o-mini-Developers",
+        "type": "Azure-OpenAI",
+        "configEnabled": true,
+        "default": true
+    },
+    {
+        "id": 242543,
+        "apiName": "Azure GPT 4o-mini model",
+        "description": "Azure GPT 4o-mini",
+        "type": "Azure-OpenAI",
+        "configEnabled": true,
+        "default": null
+    },
+    {
+        "id": 218386,
+        "apiName": "gpt-4o-mini-high ratelimit",
+        "description": "gpt-4o-mini-high ratelimit",
+        "type": "Azure-OpenAI",
+        "configEnabled": true,
+        "default": false
+    },
+    {
+        "id": 218373,
+        "apiName": "gpt-4o-mini-batch",
+        "description": "Azure OpenAI gpt-4o-mini-batch configurations",
+        "type": "Azure-OpenAI",
+        "configEnabled": false,
+        "default": null
+    },
+    {
+        "id": 17567,
+        "apiName": "Azure GPT 4o-mini",
+        "description": "Azure GPT 4o-mini",
+        "type": "Azure-OpenAI",
+        "configEnabled": true,
+        "default": null
+    },
+    {
+        "id": 14,
+        "apiName": "meta.llama3-70b-instruct-v1:0",
+        "description": "Default Bedrock API configuration\nnew key",
+        "type": "BedRock",
+        "configEnabled": true,
+        "default": null
+    }
+]
