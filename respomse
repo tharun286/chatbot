@@ -1,0 +1,50 @@
+{
+    "id": 248891,
+    "apiName": "gemini 2.5 flash",
+    "description": "gemini model",
+    "type": "Gemini",
+    "configEnabled": true,
+    "default": null,
+    "deleted": false,
+    "project": {
+        "id": 2,
+        "projectName": ""
+    },
+    "apiDetails": [
+        {
+            "id": 249726,
+            "fieldName": "geminiApiKey",
+            "value": "21ntmYuLT+1pFNbw+BW4k1UZNymK19uJUItd9TG9lOWykXdWdwSqksHxlubEsNii"
+        },
+        {
+            "id": 249727,
+            "fieldName": "model",
+            "value": "gemini-2.5-flash"
+        },
+        {
+            "id": 249728,
+            "fieldName": "isBatch",
+            "value": "false"
+        },
+        {
+            "id": 249729,
+            "fieldName": "inputTokenCost",
+            "value": "0.00015"
+        },
+        {
+            "id": 249730,
+            "fieldName": "outputTokenCost",
+            "value": "0.0006"
+        },
+        {
+            "id": 249731,
+            "fieldName": "maxTokenSize",
+            "value": "128000"
+        },
+        {
+            "id": 249732,
+            "fieldName": "tokensPerMinute",
+            "value": "498000"
+        }
+    ]
+}
