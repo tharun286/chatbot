@@ -1,0 +1,199 @@
+Request URL
+https://zenseai.zensar.com/middleware/crud/aibuddy/api/get/config/248891
+Request method
+GET
+Status code
+200 OK
+Remote address
+[100::cd20:585b:a307:8e3e]:443
+Referrer policy
+strict-origin-when-cross-origin
+
+{id: 248891, apiName: "gemini 2.5 flash", description: "gemini model", type: "Gemini",…}
+apiDetails
+: 
+[{id: 249733, fieldName: "geminiApiKey",…},…]
+apiName
+: 
+"gemini 2.5 flash"
+configEnabled
+: 
+true
+default
+: 
+null
+deleted
+: 
+false
+description
+: 
+"gemini model"
+id
+: 
+248891
+project
+: 
+{id: 2, projectName: ""}
+type
+: 
+"Gemini"
+{
+    "id": 248891,
+    "apiName": "gemini 2.5 flash",
+    "description": "gemini model",
+    "type": "Gemini",
+    "configEnabled": true,
+    "default": null,
+    "deleted": false,
+    "project": {
+        "id": 2,
+        "projectName": ""
+    },
+    "apiDetails": [
+        {
+            "id": 249733,
+            "fieldName": "geminiApiKey",
+            "value": "21ntmYuLT+1pFNbw+BW4k1UZNymK19uJUItd9TG9lOWykXdWdwSqksHxlubEsNii"
+        },
+        {
+            "id": 249734,
+            "fieldName": "model",
+            "value": "gemini-2.5-flash"
+        },
+        {
+            "id": 249735,
+            "fieldName": "isBatch",
+            "value": "false"
+        },
+        {
+            "id": 249736,
+            "fieldName": "inputTokenCost",
+            "value": "0.00015"
+        },
+        {
+            "id": 249737,
+            "fieldName": "outputTokenCost",
+            "value": "0.0006"
+        },
+        {
+            "id": 249738,
+            "fieldName": "maxTokenSize",
+            "value": "128000"
+        },
+        {
+            "id": 249739,
+            "fieldName": "tokensPerMinute",
+            "value": "498000"
+        }
+    ]
+}
+Request URL
+https://zenseai.zensar.com/middleware/crud/aibuddy/api/update/config/248891
+Request method
+PUT
+Status code
+200 OK
+Remote address
+[100::9b5e:da7b:1aaf:d976]:443
+Referrer policy
+strict-origin-when-cross-origin
+{id: 248891, apiName: "gemini 2.5 flash", description: "gemini", type: "Gemini", isConfigEnabled: true,…}
+apiDetails
+: 
+[{fieldName: "geminiApiKey", value: "AIzaSyBS6_XCB4omhOy6AR9UcNo6__Xr0sYZLmk"},…]
+apiName
+: 
+"gemini 2.5 flash"
+description
+: 
+"gemini"
+id
+: 
+248891
+isConfigEnabled
+: 
+true
+project
+: 
+{projectName: "Zensar"}
+type
+: 
+"Gemini"
+{id: 248891, apiName: "gemini 2.5 flash", description: "gemini", type: "Gemini", configEnabled: true,…}
+apiDetails
+: 
+[{id: 249740, fieldName: "geminiApiKey",…},…]
+apiName
+: 
+"gemini 2.5 flash"
+configEnabled
+: 
+true
+default
+: 
+null
+deleted
+: 
+false
+description
+: 
+"gemini"
+id
+: 
+248891
+project
+: 
+{id: 2, projectName: ""}
+type
+: 
+"Gemini
+{
+    "id": 248891,
+    "apiName": "gemini 2.5 flash",
+    "description": "gemini",
+    "type": "Gemini",
+    "configEnabled": true,
+    "default": null,
+    "deleted": false,
+    "project": {
+        "id": 2,
+        "projectName": ""
+    },
+    "apiDetails": [
+        {
+            "id": 249740,
+            "fieldName": "geminiApiKey",
+            "value": "21ntmYuLT+1pFNbw+BW4k1UZNymK19uJUItd9TG9lOWykXdWdwSqksHxlubEsNii"
+        },
+        {
+            "id": 249741,
+            "fieldName": "model",
+            "value": "gemini-2.5-flash"
+        },
+        {
+            "id": 249742,
+            "fieldName": "isBatch",
+            "value": "false"
+        },
+        {
+            "id": 249743,
+            "fieldName": "inputTokenCost",
+            "value": "0.00015"
+        },
+        {
+            "id": 249744,
+            "fieldName": "outputTokenCost",
+            "value": "0.0006"
+        },
+        {
+            "id": 249745,
+            "fieldName": "maxTokenSize",
+            "value": "128000"
+        },
+        {
+            "id": 249746,
+            "fieldName": "tokensPerMinute",
+            "value": "498000"
+        }
+    ]
+}
