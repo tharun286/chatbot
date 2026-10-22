@@ -1,0 +1,123 @@
+
+{
+    "id": 248895,
+    "apiName": " MCP_DELETE_TEST",
+    "description": "Temporary model for MCP delete API testing",
+    "type": "Azure-OpenAI",
+    "configEnabled": true,
+    "default": null,
+    "deleted": false,
+    "project": {
+        "id": 3133,
+        "projectName": ""
+    },
+    "apiDetails": [
+        {
+            "id": 249759,
+            "fieldName": "apiKey",
+            "value": "WZFN9EomzYkT1hk4855I5eVJiirE1Gru32Gl2c/Nn8W5gl67N0VLPQq+Hd2Mn8FePWf1iJnlZ1A7yMHW8Tj6kAgRelqEts0Nr3Rt8MoDjzmTNV11z9lHU2qnnUfNN7cW"
+        },
+        {
+            "id": 249760,
+            "fieldName": "baseURL",
+            "value": "https://aes-genai-developers.openai.azure.com"
+        },
+        {
+            "id": 249761,
+            "fieldName": "apiType",
+            "value": "azure"
+        },
+        {
+            "id": 249762,
+            "fieldName": "apiVersion",
+            "value": "2025-01-01-preview"
+        },
+        {
+            "id": 249763,
+            "fieldName": "deploymentName",
+            "value": "gpt-5-mini"
+        },
+        {
+            "id": 249764,
+            "fieldName": "model",
+            "value": "gpt-5-mini"
+        },
+        {
+            "id": 249765,
+            "fieldName": "isBatch",
+            "value": "false"
+        },
+        {
+            "id": 249766,
+            "fieldName": "temperature",
+            "value": "0.1"
+        },
+        {
+            "id": 249767,
+            "fieldName": "top_p",
+            "value": "0.1"
+        },
+        {
+            "id": 249768,
+            "fieldName": "inputTokenCost",
+            "value": "0.25"
+        },
+        {
+            "id": 249769,
+            "fieldName": "outputTokenCost",
+            "value": "2"
+        },
+        {
+            "id": 249770,
+            "fieldName": "maxTokenSize",
+            "value": "128000"
+        },
+        {
+            "id": 249771,
+            "fieldName": "tokensPerMinute",
+            "value": "100000"
+        }
+    ]
+}
+[
+    {
+        "id": 248895,
+        "apiName": " MCP_DELETE_TEST",
+        "description": "Temporary model for MCP delete API testing",
+        "type": "Azure-OpenAI",
+        "configEnabled": true,
+        "default": null
+    },
+    {
+        "id": 248215,
+        "apiName": "gpt-4o-mini-batch-developer",
+        "description": "Updated from MCP",
+        "type": "Azure-OpenAI",
+        "configEnabled": true,
+        "default": false
+    },
+    {
+        "id": 247367,
+        "apiName": "gpt-5-nano",
+        "description": "gpt-5-nano",
+        "type": "Azure-OpenAI",
+        "configEnabled": false,
+        "default": null
+    },
+    {
+        "id": 247366,
+        "apiName": "gpt-5-mini",
+        "description": "gpt-5-mini",
+        "type": "Azure-OpenAI",
+        "configEnabled": false,
+        "default": null
+    },
+    {
+        "id": 6790,
+        "apiName": "gpt-4o-mini-high ratelimit",
+        "description": "gpt-4o-mini-high ratelimit",
+        "type": "Azure-OpenAI",
+        "configEnabled": true,
+        "default": true
+    }
+]
