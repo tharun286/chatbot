@@ -1,0 +1,2178 @@
+import os
+import re
+import glob
+import time
+import json
+import uuid as _uuid
+from datetime import datetime
+
+from fastapi import Request
+from fastapi.responses import JSONResponse
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from langchain_community.vectorstores import FAISS
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.output_parsers import StrOutputParser
+
+from ..hls_platform.utils import initialize_5o_mini, initialize_5o_mini_llm
+from .embedding_provider_p import get_azure_embeddings
+from .greetings import greeting_phrases
+from ..utils.utils import getOSpecifiers
+from ..configurations.session import get_session, AsyncSessionLocal
+from common.database.models.content_factory import (HLSChatbotHistory,SupportTicket)
+
+from ..repository.zenseai_content_factory_repo import get_sources_from_db_repo
+
+
+def _get_index_folder(domain='hls'):
+    sys_type, _ = getOSpecifiers()
+
+    linux_roots = {
+        'hls': '/apps/ebuddy/HLS_chatbot_index',
+        'zenseai': '/apps/ebuddy/Zenseai_CF_index',
+        'sales': '/apps/ebuddy/Sales_chatbot_index',
+    }
+
+    win_names = {
+        'hls': 'HLS_chatbot_index',
+        'zenseai': 'Zenseai_CF_index',
+        'sales': 'Sales_chatbot_index',
+    }
+
+    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+    if sys_type == 'linux':
+        return linux_roots.get(domain, linux_roots['hls'])
+
+    return os.path.join(base_dir, win_names.get(domain, win_names['hls']))
+
+
+def _refine_query(query, conversation_history, llm):
+    conv_str = str(conversation_history).replace('{', '{{').replace('}', '}}')
+
+    prompt_template = f"""
+    You are a concise and intelligent query refinement assistant.
+    Your goal:
+    - Refine the user's latest message into a clear, complete standalone query.
+    - Use the full conversation history to understand the user's intent and context.
+    - Correct grammar or phrasing errors while keeping the meaning and tone natural.
+    - Avoid unnecessary rewording — only improve clarity and completeness.
+    Conversation History:
+    {{conv_str}}
+    Latest User Query:
+    {{query}}
+    Output:
+    Provide ONLY the refined query as one line of plain text. Do not include explanations, greetings, or formatting.
+    """
+
+    chain = ChatPromptTemplate.from_messages([
+        ("system", prompt_template),
+        ("human", "{input}")
+    ]) | llm | StrOutputParser()
+
+    return chain.invoke({
+        "input": query,
+        "conv_str": conv_str,
+        "query": query
+    })
+
+
+_SERVER_PATH_RE = re.compile(r"/apps/[^\s\"'<>)]*[^\s\"'<>).,;:]")
+
+
+def _document_to_dict(doc):
+    # Server file paths must never reach the model, or it may repeat them to the user.
+    clean_metadata = {
+        k: v
+        for k, v in doc.metadata.items()
+        if k != 'chunk_id'
+        and 'path' not in str(k).lower()
+        and not (isinstance(v, str) and v.startswith('/apps/'))
+    }
+
+    return {
+        "page_content": _SERVER_PATH_RE.sub('', doc.page_content or ''),
+        "metadata": clean_metadata
+    }
+
+
+_INTERNAL_ID_RE = re.compile(r'(?:the\s+)?document_unique_id\s*[:=]?\s*["\u201c\']?\w+["\u201d\']?', re.IGNORECASE)
+
+
+def _scrub_internal_refs(text):
+    """Safety net: remove server paths and internal ids from a reply."""
+    if not text:
+        return text
+    text = _SERVER_PATH_RE.sub('the source documents link below', text)
+    text = _INTERNAL_ID_RE.sub('an internal reference', text)
+    return text
+
+
+async def _lookup_sources(db, doc_ids, domain=None):
+    """Look up source documents. If the domain filter matches nothing, retry without it and log which one matched."""
+    rows = await get_sources_from_db_repo(db=db, doc_ids=doc_ids, domain=domain)
+    if not rows and domain and doc_ids:
+        rows = await get_sources_from_db_repo(db=db, doc_ids=doc_ids, domain=None)
+        print(f"[sources] no match with domain={domain!r}; without domain filter returned={len(rows)}")
+    return rows
+
+
+async def _find_match(query, domain='hls', db=None):
+    try:
+        index_folder = _get_index_folder(domain)
+        embeddings = await get_azure_embeddings(db)
+
+        index = FAISS.load_local(
+            index_folder,
+            embeddings,
+            "index",
+            allow_dangerous_deserialization=True
+        )
+
+        results_with_scores = index.similarity_search_with_score(query, k=3)
+        for doc, score in results_with_scores:
+            print(
+                "MATCH:",
+                doc.metadata.get("filename"),
+                "SCORE:",
+                score
+            )
+        results = [doc for doc, score in results_with_scores]
+        print("[retrieval] " + str([(d.metadata.get("document_unique_id"), d.metadata.get("filename")) for d, _ in results_with_scores]))
+
+        similar_chunk_ids = sorted([
+            int(doc.metadata["chunk_id"])
+            for doc in results
+        ])
+
+        expanded_ids = set()
+
+        for cid in similar_chunk_ids:
+            expanded_ids.update([cid - 1, cid, cid + 1])
+
+        expanded_results = []
+
+        for cid in sorted(expanded_ids):
+            expanded_results.extend(
+                doc
+                for doc in index.docstore._dict.values()
+                if int(doc.metadata.get("chunk_id", -1)) == cid
+            )
+
+        context = [
+            _document_to_dict(doc)
+            for doc in expanded_results
+        ]
+
+        # Collect unique document IDs from results
+        doc_ids = list({
+            doc.metadata.get("document_unique_id")
+            for doc in results
+            if doc.metadata.get("document_unique_id")
+        })
+
+        return context, doc_ids
+
+    except FileNotFoundError:
+        return {
+            "error": f"Index not found at '{_get_index_folder(domain)}'."
+        }, []
+
+    except Exception as e:
+        return {
+            "error": f"Error during FAISS search: {str(e)}"
+        }, []
+
+
+# ---------------------------------------------------------------------------
+# Brand configuration for Aetheris BioGroup therapeutic brands
+# ---------------------------------------------------------------------------
+
+BRAND_CONFIG = {
+    'synapta': {
+        'display_name': 'Synapta',
+        'therapeutic_area': 'Neurology',
+        'tone': 'Empathetic, calm, and cerebral',
+        'tagline': 'Reconnecting the Self',
+        'empathy_style': (
+            "calm and deeply compassionate — first acknowledge the patient's "
+            "neurological experience with genuine warmth before addressing their question"
+        ),
+        'patient_persona': 'Maya',
+        'hcp_persona': 'Dr. Alex',
+    },
+    'verveen': {
+        'display_name': 'Verveen',
+        'therapeutic_area': 'Immunology',
+        'tone': 'Encouraging, gentle, and resilient',
+        'tagline': 'Defense in Harmony',
+        'empathy_style': (
+            "gentle and encouraging — honor the patient's daily resilience and "
+            "validate the challenges of living with an autoimmune condition before answering"
+        ),
+        'patient_persona': 'Jordan',
+        'hcp_persona': 'Dr. Reyes',
+    },
+    'kinetix': {
+        'display_name': 'Kinetix',
+        'therapeutic_area': 'Oncology',
+        'tone': 'Bold, clinical, and relentless',
+        'tagline': 'Precision. Power. Persistence.',
+        'empathy_style': (
+            "strong and determined — stand firmly alongside the patient, "
+            "acknowledging the weight of their oncology journey before providing information"
+        ),
+        'patient_persona': 'Marcus',
+        'hcp_persona': 'Dr. Morgan',
+    },
+}
+
+# Primary brand name keywords used for detection (checked against metadata + content)
+_BRAND_KEYWORDS = {
+    'synapta': ['synapta'],
+    'verveen': ['verveen'],
+    'kinetix': ['kinetix', 'kinetrix'],
+}
+
+# Fallback personas when brand is unknown
+PATIENT_SUPPORT_PERSONA = 'James'
+MEDICAL_TEAM_PERSONA = 'Dr. Rivera'
+
+# Adverse-event reporting phone number
+AE_REPORT_PHONE = '+1-800-332-1088'
+
+async def _get_stored_journey(session_uuid, db):
+    """Return the last persisted journey ('hcp' or 'patient') for this session, or None."""
+    if not session_uuid or not db:
+        return None
+    try:
+        stmt = select(HLSChatbotHistory).where(
+            HLSChatbotHistory.session_uuid == session_uuid
+        )
+        result = await db.execute(stmt)
+        existing = result.scalar_one_or_none()
+        if existing:
+            history = json.loads(existing.chat_history or '[]')
+            for msg in reversed(history):
+                if isinstance(msg, dict) and msg.get('role') == 'user':
+                    stored = msg.get('journey')
+                    if stored in ('hcp', 'patient'):
+                        return stored
+    except Exception:
+        pass
+    return None
+
+
+def _classify_journey_llm(query, conversation_history, llm):
+    """Use the LLM to decide whether the current message signals HCP, patient, or no change.
+
+    Returns 'hcp', 'patient', or 'unchanged'.
+    The LLM understands natural language so it catches phrasings that keyword
+    lists miss: 'as the treating oncologist', 'my patient is having side effects',
+    'I was just diagnosed', etc.
+    """
+    conv_str = str(conversation_history)[-1500:]
+
+    system_text = (
+        'You are a role classifier for a medical chatbot. '
+        'Classify the role of the PERSON SENDING THE LATEST MESSAGE based on what they say about themselves.\n\n'
+        'Return ONLY valid JSON: {{"journey": "hcp" | "patient" | "unchanged"}}\n\n'
+        'Rules:\n'
+        '- "hcp": the user indicates they are a healthcare professional -- doctor, nurse, pharmacist, '
+        'specialist, prescriber, MSL, or similar -- OR uses phrases like "my patient", "I am treating", '
+        '"from a clinical perspective", "as an oncologist", "I am prescribing".\n'
+        '- "patient": the user indicates they are a patient or caregiver -- they describe taking the '
+        'medication themselves, mention personal symptoms, or say things like "I have been diagnosed", '
+        '"I am not a doctor", "I am taking this".\n'
+        '- "unchanged": the message gives no clear signal about who the user IS -- it is just a question '
+        'or comment without self-identification.\n\n'
+        'IMPORTANT: Classify the USER, not the topic. '
+        '"What does my doctor think?" means patient. "My patient has a fever" means hcp.\n\n'
+        'Conversation so far:\n{conv_str}\n\n'
+        'Latest message: {query}'
+    )
+
+    chain = ChatPromptTemplate.from_messages([
+        ("system", system_text),
+        ("human", "{input}"),
+    ]) | llm | StrOutputParser()
+
+    try:
+        raw = chain.invoke({"input": query, "query": query, "conv_str": conv_str}).strip()
+        if raw.startswith('```'):
+            raw = raw.split('\n', 1)[-1].rsplit('```', 1)[0].strip()
+        result = json.loads(raw)
+        journey = result.get("journey", "unchanged")
+        if journey in ("hcp", "patient", "unchanged"):
+            return journey
+    except Exception:
+        pass
+    return "unchanged"
+
+def _detect_brand(query=''):
+    """Return the BRAND_CONFIG entry the user explicitly named in their query.
+
+    Only the patient's own words are checked — retrieved document chunks are
+    intentionally ignored.  If the user hasn't mentioned a brand the bot must
+    not assume one from the FAISS results; a generic prompt is used instead.
+    """
+    query_lower = query.lower()
+    for brand_key, keywords in _BRAND_KEYWORDS.items():
+        if any(kw in query_lower for kw in keywords):
+            return BRAND_CONFIG[brand_key]
+    return None
+
+
+def _detect_brand_from_history(conversation_history):
+    """Return the brand most recently mentioned in the conversation history.
+
+    Handles both formats the frontend may send:
+      - String (formatted text): scan the whole string, return the brand
+        whose keyword appears latest (rightmost position).
+      - List of dicts/strings: scan the last 6 entries newest-first and
+        return on the first brand match.
+    """
+    if isinstance(conversation_history, str):
+        text_lower = conversation_history.lower()
+        last_positions = {}
+        for brand_key, keywords in _BRAND_KEYWORDS.items():
+            pos = max((text_lower.rfind(kw) for kw in keywords), default=-1)
+            if pos >= 0:
+                last_positions[brand_key] = pos
+        if last_positions:
+            return BRAND_CONFIG[max(last_positions, key=last_positions.get)]
+        return None
+
+    # List format
+    for message in reversed(conversation_history[-6:]):
+        if isinstance(message, dict):
+            text = message.get('content') or message.get('message') or ''
+        elif isinstance(message, str):
+            text = message
+        else:
+            continue
+        text_lower = text.lower()
+        for brand_key, keywords in _BRAND_KEYWORDS.items():
+            if any(kw in text_lower for kw in keywords):
+                return BRAND_CONFIG[brand_key]
+    return None
+def classify_user_intent(query,conversation_history, llm):
+    prompt = """
+You are a classifier.
+Your task is NOT to identify whether the sentence contains the word 'product','support'.
+Your task is to identify whether the user is:
+1.SUPPORT:
+The user has a problem, complaint, issue, failure, missing item, technical difficulty, access issue, login issue, payment issue, order issue, delivery issue, account issue, QR code issue, or is requesting assistance.
+   support
+   - login issues
+   - account problems
+   - QR code issues
+   - payment issues
+   - order issues
+   - technical problems
+   - website/app issues
+   - access problems
+   - shipment issues
+   -application errors
+Examples:
+- I cannot login
+- My account is locked
+- I forgot my password
+- My payment failed
+- I didn't receive my order
+- I didn't receive my product
+- My QR code is missing
+- The application crashed
+- The website is not working
+- I ordered Synapta but never received it
+- My Verveen order is delayed
+- My Synapta QR code is not showing
+- Payment failed while ordering Kinetix
+- I need help
+2.KNOWLEDGE:
+The user is requesting information about a medicine, brand, company, document, dosage, side effect, clinical data, indication, or healthcare information.
+Examples:
+- Tell me about Synapta
+- Tell me about Verveen
+- What are the side effects of Synapta?
+- What is the dosage of Kinetix?
+- Explain the clinical study
+  knowledge
+   - medication questions
+   - brand questions
+   - dosage
+   - side effects
+   - clinical information
+   - healthcare questions
+   - how to use this medical product question
+   -medical information
+   -company information
+   -documents information
+   -feedback
+   -questions about products, medications, indications,
+   - genral inquiries about the products
+Return ONLY valid JSON.
+IMPORTANT:
+Symptoms, side effects, adverse reactions, dose questions, and dose changes are ALWAYS knowledge, never support, even when phrased as 'I am having ...' or 'I have ...'. Only website, portal, login, account, order, payment, delivery, QR code, and application problems are support.
+If the user is asking for help regarding a problem, reporting a problem, reporting something missing,
+reporting something not working, requesting assistance, complaining about a process,
+order, payment, login, QR code, delivery, portal, account, website, application,
+or access issue, ALWAYS return:
+{{"intent":"support"}}
+
+Even if the message contains a product name.
+
+{{
+  "intent": "support"
+}}
+
+OR
+
+{{
+  "intent": "knowledge"
+}}
+"""
+
+    chain = (
+        ChatPromptTemplate.from_messages([
+            ("system", prompt),
+            ("human", "{query}")
+        ])
+        | llm
+        | StrOutputParser()
+    )
+    response = None
+    try:
+        response = chain.invoke({"query": query})
+        print("RAW CLASSIFIER RESPONSE =", response)
+        result = json.loads(response)
+        print("PARSED INTENT =", result.get("intent"))
+        return result.get("intent", "knowledge")
+    except Exception as e:
+        print("CLASSIFIER ERROR =", repr(e))
+        print("RAW CLASSIFIER RESPONSE =", response)
+        return "knowledge"
+
+
+def _build_hls_brand_prompt(brand, is_first_message=True, brand_switched=False, is_hcp=False, journey_switched=False):
+    """Build a brand-aware HLS system prompt.
+
+    Persona names are pinned constants so they never drift across turns or brand switches.
+    is_hcp=True  → clinical/MSL tone (Medical Team)
+    is_hcp=False → empathetic patient-support tone (Patient Support Team)
+    """
+    persona    = brand.get('hcp_persona', MEDICAL_TEAM_PERSONA) if is_hcp else brand.get('patient_persona', PATIENT_SUPPORT_PERSONA)
+    team_label = 'Medical Team'       if is_hcp else 'Patient Support Team'
+
+    if is_hcp:
+        # ── HCP / clinician journey ────────────────────────────────────────
+        if is_first_message:
+            opening_instruction = (
+                'OPENING — First message from this HCP.\n'
+                'Do NOT introduce yourself or say hello; the system adds the greeting. '
+                'Immediately address their clinical question '
+                'with precision and directness.\n\n'
+            )
+        elif journey_switched:
+            opening_instruction = (
+                'OPENING - The user has just identified as an HCP.\n'
+                'Do NOT introduce yourself or say hello; the system adds the greeting. '
+                'Acknowledge the shift - you are now speaking clinician-to-clinician. '
+                'Address their clinical question directly.\n\n'
+            )
+        elif brand_switched:
+            opening_instruction = (
+                'OPENING - HCP has switched to asking about __NAME__.\n'
+                'You are still __PERSONA__ from the __TEAM__. '
+                'Briefly acknowledge the topic change and address the new question directly. '
+                'Do NOT re-introduce yourself as a new person.\n\n'
+            )
+        else:
+            opening_instruction = (
+                'OPENING - Follow-up from an HCP about __NAME__.\n'
+                'You are __PERSONA__. Do NOT re-introduce yourself. '
+                'Continue with clinical precision.\n\n'
+            )
+
+        template = (
+            'You are __PERSONA__, a Medical Science Liaison (MSL) from the '
+            '__NAME__ __TEAM__ (__AREA__, Aetheris BioGroup). '
+            'Tone: clinical, professional, and direct — __TONE__.\n\n'
+
+            '__OPENING__'
+
+            'Reply like a scientific colleague, not a chatbot. '
+            'Use clinical terminology appropriate for a physician audience. '
+            'Reference only the data from the context that answers the question asked. '
+            'Use bullets only when listing 3+ distinct data points; otherwise sentences. '
+            'If the HCP needs deeper clinical support beyond what the context provides, '
+            'suggest they connect directly with a __NAME__ MSL.\n\n'
+
+            'Use Markdown: \\n\\n between paragraphs, ** for bold, - for bullets. '
+            'No headings.\n\n'
+
+            'Context chunks have "page_content" and "metadata" '
+            '("filename", "document_unique_id"). Use only what is relevant.\n\n'
+
+            'Suggest 2-3 relevant clinical follow-up questions in "follow_ups".\n\n'
+
+            'Return ONLY valid JSON:\n'
+            '{{"answer": "<response>", '
+            '"sources": [{{"document_unique_id": "<id>", "page_number": <number or null>}}], '
+            '"follow_ups": ["<q1>", "<q2>"], '
+            '"show_msl_button": true}}\n'
+            'No context match: '
+            '{{"answer": "I don\'t have that clinical data available — '
+            'connecting with a __NAME__ MSL would be the best next step.", '
+            '"sources": [], "follow_ups": [], "show_msl_button": true}}\n'
+            'Page number from "--- PAGE X ---" if present, else null.\n'
+        )
+
+    else:
+        # ── Patient journey ────────────────────────────────────────────────
+        if is_first_message:
+            opening_instruction = (
+                'OPENING — This is the patient\'s first message.\n'
+                'Do NOT introduce yourself or say hello; the system adds the greeting. '
+                'Sound like a real person on a support call, not a system greeting. '
+                'Acknowledge the patient\'s concern with genuine warmth — __EMPATHY__.\n\n'
+            )
+        elif journey_switched:
+            opening_instruction = (
+                'OPENING - The user has just identified as a patient.\n'
+                'Do NOT introduce yourself or say hello; the system adds the greeting. '
+                'Transition warmly into patient support mode - __EMPATHY__.\n\n'
+            )
+        elif brand_switched:
+            opening_instruction = (
+                'OPENING - Patient has switched to asking about __NAME__ '
+                'after discussing a different brand earlier.\n'
+                'You are still __PERSONA__ from the __TEAM__. '
+                'Acknowledge the switch naturally - you are the right person '
+                'they are now speaking with about __NAME__. '
+                'Acknowledge their new concern with warmth - __EMPATHY__.\n\n'
+            )
+        else:
+            opening_instruction = (
+                'OPENING - Follow-up in an ongoing conversation about __NAME__.\n'
+                'You are __PERSONA__. Do NOT re-introduce yourself. '
+                'Acknowledge what the patient said with genuine warmth - __EMPATHY__. '
+                'Pick up exactly where the last exchange left off.\n\n'
+            )
+
+        template = (
+            'You are __PERSONA__, a patient support representative from the '
+            '__NAME__ __TEAM__ (__AREA__, Aetheris BioGroup). Tone: __TONE__.\n\n'
+
+            '__OPENING__'
+
+            'Reply like a real person on a support call — not a chatbot. '
+            'Be brief and warm. Translate any clinical language into plain words. '
+            'Use bullets only for 3+ separate points; otherwise plain sentences. '
+            'Always suggest the patient speak with their prescribing doctor '
+            'for medical decisions. '
+            'Close with one warm sentence, like a support person ending a call.\n\n'
+
+            'Use Markdown: \\n\\n between paragraphs, ** for bold, - for bullets. '
+            'No headings.\n\n'
+
+            'Context chunks have "page_content" and "metadata" '
+            '("filename", "document_unique_id"). Use only what is relevant.\n\n'
+
+            'Suggest 2-3 natural follow-up questions in "follow_ups".\n\n'
+
+            'Return ONLY valid JSON:\n'
+            '{{"answer": "<response>", '
+            '"sources": [{{"document_unique_id": "<id>", "page_number": <number or null>}}], '
+            '"follow_ups": ["<q1>", "<q2>"], '
+            '"show_msl_button": false}}\n'
+            'No context match: '
+            '{{"answer": "I don\'t have that detail right now — '
+            'your __NAME__ care team or doctor will be the best people to ask.", '
+            '"sources": [], "follow_ups": [], "show_msl_button": false}}\n'
+            'Page number from "--- PAGE X ---" if present, else null.\n'
+        )
+
+    return (
+        template
+        .replace('__OPENING__', opening_instruction)
+        .replace('__PERSONA__', persona)
+        .replace('__TEAM__', team_label)
+        .replace('__NAME__', brand['display_name'])
+        .replace('__AREA__', brand['therapeutic_area'])
+        .replace('__TONE__', brand['tone'])
+        .replace('__EMPATHY__', brand.get('empathy_style', ''))
+    )
+
+
+ZENSEAI_SYSTEM_PROMPT = """
+You are a ZenseAI Content Factory AI Assistant — a knowledgeable and professional
+chatbot that helps users with questions about content, documents, and materials
+available in the ZenseAI Content Factory.
+
+Guidelines:
+1. Use ONLY the provided context to generate your answer. The context contains document chunks,
+   each with a "page_content" field (the text) and a "metadata" field that includes "filename"
+   (the source document name) and "document_unique_id" (unique identifier of the source document).
+2. If the answer cannot be derived from the context, return:
+   {{"answer": "I'm sorry, I don't have that information in my current knowledge base.", "sources": [], "follow_ups": []}}
+3. Be professional, concise, and accurate.
+4. You MUST respond in valid JSON only. Use this exact format:
+   {{"answer": "<your answer text here>", "sources": [{{"document_unique_id": "<id>", "page_number": <number or null>}}], "follow_ups": ["<follow-up question 1>", "<follow-up question 2>", "<follow-up question 3>"]}}
+5. In the "sources" array, include ONLY the documents you actually used to form the answer.
+   Use the "document_unique_id" from the chunk metadata.
+6. If the page_content contains "--- PAGE X ---" markers, extract the page number X from the FIRST marker in the content you used. Otherwise, set page_number to null.
+7. Do NOT include any text outside the JSON object. Return ONLY valid JSON.
+8. After answering, generate 2-3 relevant follow-up questions the user might naturally ask next,
+   based strictly on the answer and retrieved context. Include them in the "follow_ups" array.
+   If no meaningful follow-ups exist, set "follow_ups" to [].
+"""
+
+DOMAIN_SYSTEM_PROMPTS = {
+    'hls': None,
+    'zenseai': ZENSEAI_SYSTEM_PROMPT,
+}
+
+DOMAIN_GREETINGS = {
+    'hls': (
+        "Hi there! Thanks for reaching out. I'm here to help with any questions "
+        "you have about your medication or treatment — feel free to share "
+        "what's on your mind."
+    ),
+    'zenseai': "Hello! I'm your ZenseAI Content Factory assistant. How can I help you today?",
+}
+
+HLS_SYSTEM_PROMPT = """
+You are an HLS (Healthcare Life Sciences) AI Assistant — a knowledgeable and professional
+chatbot that helps medical professionals and stakeholders with questions about pharmaceutical
+products, clinical data, prescribing information, dosage, mechanism of action, adverse
+reactions, and more.
+
+Guidelines:
+1. Use ONLY the provided context to generate your answer. The context contains document chunks,
+   each with a "page_content" field (the text) and a "metadata" field that includes "filename"
+   (the source document name) and "document_unique_id" (unique identifier of the source document).
+2. If the answer cannot be derived from the context, return:
+   {{"answer": "I'm sorry, I don't have that information in my current knowledge base.", "sources": [], "follow_ups": []}}
+3. Be professional, concise, and medically accurate.
+4. You MUST respond in valid JSON only. Use this exact format:
+   {{"answer": "<your answer text here>", "sources": [{{"document_unique_id": "<id>", "page_number": <number or null>}}], "follow_ups": ["<follow-up question 1>", "<follow-up question 2>", "<follow-up question 3>"]}}
+5. In the "sources" array, include ONLY the documents you actually used to form the answer.
+   Use the "document_unique_id" from the chunk metadata.
+6. If the page_content contains "--- PAGE X ---" markers, extract the page number X from the FIRST marker in the content you used. Otherwise, set page_number to null.
+7. Do NOT include any text outside the JSON object. Return ONLY valid JSON.
+8. After answering, generate 2-3 relevant follow-up questions the user might naturally ask next,
+   based strictly on the answer and retrieved context. Include them in the "follow_ups" array.
+   If no meaningful follow-ups exist, set "follow_ups" to [].
+"""
+
+DOMAIN_SYSTEM_PROMPTS['hls'] = HLS_SYSTEM_PROMPT
+
+
+# ---------------------------------------------------------------------------
+# Compliance guardrails for HLS responses
+#   - Dosage and efficacy answers always carry Prescribing Information (PI) access
+#   - Efficacy answers always carry risk information
+#   - Off-label / under-18 questions are routed to an MSL (no dosing given)
+#   - Individualized dose-change requests get no personal dosing advice
+#   - Comparative / superiority claims are declined
+# ---------------------------------------------------------------------------
+
+# Document ID of the Synapta Prescribing Information. The PI is opened through the
+# same document record the UI already uses for attached files (document_path).
+PRESCRIBING_INFO_DOCUMENT_ID = '1474'   # legacy constant (Synapta), kept for backward compatibility
+PRESCRIBING_INFO_FILE_PATH = '/apps/ebuddy/veeva_microsites/fe77d805-b1fd-4669-bbef-6bbfc961f5d9/PI_SYNAPTA.docx'
+
+# Prescribing Information per brand. The PI is returned to the UI as a button (see _get_pi_document).
+#   document_id   : id of the PI record in the documents table (looked up in the DB for id / path)
+#   filename      : display file name
+#   document_path : fallback path for the view_file endpoint, used only if the DB row has no path
+# Verveen/Kinetix paths were read from the demo server's index. Document ids 1473/1475 come from
+# BRAND_SOURCE_DOCUMENT_IDS below; the PI file opens by path even if the DB has no row for them.
+# Paths/ids can be overridden per server with environment variables, e.g.
+#   PI_PATH_VERVEEN=/apps/ebuddy/veeva_microsites/<uuid>/PI_VERVEEN.docx
+#   PI_DOCID_VERVEEN=1473
+BRAND_PI_CONFIG = {
+    'synapta': {
+        'document_id': os.getenv('PI_DOCID_SYNAPTA', '1474'),
+        'filename': 'PI_SYNAPTA.docx',
+        'document_path': os.getenv('PI_PATH_SYNAPTA', PRESCRIBING_INFO_FILE_PATH),
+    },
+    'verveen': {
+        'document_id': os.getenv('PI_DOCID_VERVEEN', '1473'),
+        'filename': 'PI_VERVEEN.docx',
+        'document_path': os.getenv('PI_PATH_VERVEEN', '/apps/ebuddy/veeva_microsites/28bb6209-81a0-4f47-9eb5-423c0fe140c2/PI_VERVEEN.docx'),
+    },
+    'kinetix': {
+        'document_id': os.getenv('PI_DOCID_KINETIX', '1475'),
+        'filename': 'PI_KINETIX.docx',
+        'document_path': os.getenv('PI_PATH_KINETIX', '/apps/ebuddy/veeva_microsites/0704692d-01d3-4f06-b7da-89ff665abde9/PI_KINETIX.docx'),
+    },
+}
+PI_DOCUMENT_IDS = {str(c['document_id']) for c in BRAND_PI_CONFIG.values()}
+# False = patients still see the PI as a normal source citation (just no PI button).
+HIDE_PI_SOURCES_FOR_PATIENTS = False
+
+# document_path for source documents, keyed by document ID. Used when the database returns no path,
+# so those sources become clickable. Add each document's path (from the view_file request in the Network tab).
+# Synapta documents that are always listed for clinician PI questions, when they exist in the database.
+# 1474 = Prescribing Information (PI_SYNAPTA.docx); 3406 = Synapta PATHWAY-III clinical study report (V2).
+# Other products' reports (Verveen 3405, Kinetix 3407) and the ZenseAI brand file (1479) are not Synapta documents.
+BRAND_SOURCE_DOCUMENT_IDS = {
+    "synapta": ["1474", "3406"],
+    "verveen": ["1473", "3405"],
+    "kinetix": ["1475", "3407"],
+}
+def get_brand_source_documents(query, conversation_history):
+    brand = (
+        _detect_brand(query)
+        or _detect_brand_from_history(conversation_history)
+    )
+
+    if not brand:
+        return []
+
+    return BRAND_SOURCE_DOCUMENT_IDS.get(
+        brand["display_name"].lower(),
+        []
+    )
+
+KNOWN_DOCUMENT_PATHS = {
+    **{cfg['document_id']: cfg['document_path']
+       for cfg in BRAND_PI_CONFIG.values() if cfg.get('document_path')},
+    '3407': '/apps/ebuddy/veeva_microsites/4c4e53b1-00db-4473-b3f1-0cab6b19e7a9/Kinetix_Phase_III_Clinical_Study_Report_-_PULSE-III_Long_Form.pdf',   # Kinetix PULSE-III study report
+    # '3406': '<document_path of the PATHWAY-III clinical study report>',
+    # '<id>': '<document_path of ZenseAI Brand setup.docx>',
+}
+
+_DOSAGE_RE = re.compile(
+    r'(\bdos(?:e|es|age|ages|ing)\b|\d\s*(?:mg|mcg|g|ml)\b|\bhow much\b|\btitrat\w*)',
+    re.IGNORECASE,
+)
+_EFFICACY_RE = re.compile(
+    r'\b(effective\w*|efficacy|how well|works? (?:for|on|against)|benefits?|improv\w*'
+    r'|response rate|outcomes?)\b',
+    re.IGNORECASE,
+)
+_COMPARATIVE_RE = re.compile(
+    r'\b(better|worse|superior|inferior|outperform\w*|versus|vs\.?|compared? (?:to|with)'
+    r'|(?:more|less|greater|fewer|higher|lower) \w+ than)\b',
+    re.IGNORECASE,
+)
+_INDIVIDUALIZED_RE = re.compile(
+    r'(\b(?:max(?:imum)?|highest|higher)\s+(?:dos\w*|mg)\b'
+    r'|\b(?:increase|raise|up-?titrate|adjust|change|reduce|lower|decrease|cut|halve|stop)\s+(?:the\s+|my\s+|his\s+|her\s+|their\s+)?(?:dos\w*|mg)\b'
+    r'|\bcan i (?:increase|raise|reduce|lower|decrease|cut|stop)\b'
+    r'|\b(?:should|shall) i (?:increase|raise|reduce|lower|decrease|cut|stop|change|adjust|titrate)\b'
+    r'|\b(?:he|she|they|patient)\s+(?:is|has been|have been)\s+(?:taking|on)\s+\d)',
+    re.IGNORECASE,
+)
+# Matches "8 year old", "8-year-old", "20 yo", "aged 8"
+_AGE_RE = re.compile(
+    r'\b(\d{1,3})[\s-]*(?:years?|yrs?)[\s-]*old\b'
+    r'|\b(\d{1,3})\s*y/?o\b'
+    r'|\baged?\s+(\d{1,3})\b',
+    re.IGNORECASE,
+)
+_SOURCE_REQUEST_RE = re.compile(
+    r'\b(source documents?|sources?|references?|documents?|links?)\b',
+    re.IGNORECASE,
+)
+_PEDIATRIC_RE = re.compile(
+    r'\b(child|children|pediatric|paediatric|infant|toddler|adolescent|teen\w*|kid|kids)\b',
+    re.IGNORECASE,
+)
+
+_OFF_LABEL_RESPONSE = (
+    "Dosing for patients under 18 would be an off-label question for {brand}, "
+    "and I'm not able to advise on it. Please connect with a {brand} MSL, "
+    "who can discuss off-label and pediatric questions with you directly."
+)
+_COMPARATIVE_RESPONSE = (
+    "I currently don't have information regarding {comparator}, so I'm not able to "
+    "compare it with {brand}. I also can't make comparative or superiority claims "
+    "between medicines. A {brand} MSL can walk you through the available clinical "
+    "data in more detail."
+)
+_COMPARATOR_RE = re.compile(
+    r'(?:\bthan|\bagainst|\bversus|\bvs\.?|\bcompared (?:to|with)|\bwith)\s+(?:the\s+)?([A-Z][A-Za-z-]+)'
+)
+
+
+def _comparator_name(query, brand_name):
+    # Name the other medicine only when the question names one (not the brand itself).
+    for m in _COMPARATOR_RE.finditer(query or ''):
+        name = m.group(1)
+        if name.lower() != (brand_name or '').lower():
+            return name
+    return "that medicine"
+
+
+def _comparison_reply(brand_name):
+    return (
+        f"As a medical information service, I cannot state whether {brand_name} "
+        f"is more effective than another medicine or make comparative efficacy "
+        f"claims between therapies.\n\n"
+        f"I can provide information about {brand_name} based on its approved "
+        f"prescribing information and supporting clinical documents. "
+        f"If you would like a scientific review of the available evidence, "
+        f"a {brand_name} Medical Science Liaison (MSL) can assist."
+    )
+
+
+def _comparative_opening(query, brand_name):
+    return (
+        f"I currently don't have information regarding {_comparator_name(query, brand_name)}, "
+        f"so I'm not able to compare it with {brand_name}."
+    )
+_AE_FOLLOW_UP = (
+    "Because this symptom started after taking {brand}, it should be evaluated "
+    "by the treating clinician. You can also report it by calling {phone}."
+)
+
+
+def _extract_ages(text):
+    ages = []
+    for m in _AGE_RE.finditer(text or ''):
+        num = next(g for g in m.groups() if g is not None)
+        ages.append(int(num))
+    return ages
+
+
+def _compliance_flags(query):
+    q = query or ''
+    flags = {
+        'dosage': bool(_DOSAGE_RE.search(q)),
+        'efficacy': bool(_EFFICACY_RE.search(q)),
+        'comparative': bool(_COMPARATIVE_RE.search(q)),
+        'individualized': bool(_INDIVIDUALIZED_RE.search(q)),
+        'off_label': any(age < 18 for age in _extract_ages(q)) or bool(_PEDIATRIC_RE.search(q)),
+    }
+    flags['pi_required'] = flags['dosage'] or flags['individualized'] or (flags['efficacy'] and not flags['comparative'])
+    flags['source_request'] = bool(_SOURCE_REQUEST_RE.search(q))
+    return flags
+
+
+def _compliance_brand_name(query, conversation_history):
+    brand = _detect_brand(query or '') or _detect_brand_from_history(conversation_history or [])
+    return brand['display_name'] if brand else 'this product'
+
+
+def _build_compliance_instruction(flags, opening=None, hcp=True, brand_name='this product', comparator=None):
+    lines = [
+        "",
+        "COMPLIANCE RULES (mandatory, these override all other guidance):",
+        "- Base statements about this product only on the provided context. Do not use outside knowledge about this product.",
+        "- Do not make comparative, superiority, or equivalence claims against any other medicine.",
+        "- Refer to the full Prescribing Information by that exact name whenever you discuss dosing, efficacy, or safety.",
+        "- In the answer text, do not write URLs, file paths, or folder names. "
+        "If asked where to find a document, say it is available through the source documents link under the answer. "
+        "This does NOT change the JSON \"sources\" array: always keep listing every document you used there, with its document_unique_id.",
+        "- Answer only what was asked. Do not add dosing, titration, or a list of common adverse reactions unless the question asks for it.",
+        "- Do not speculate about the cause of a reported symptom. Do not suggest other causes, concomitant medications, or idiosyncratic reactions.",
+        "- Do not name the active ingredient or state any fact about this product that is not in the provided context. If the context does not cover the question, say so in one sentence.",
+        "- Do not mention adverse event reporting; the system adds it when required.",
+    ]
+    if flags['dosage']:
+        lines.append(
+            "- Dosing: state only the dose documented in the context, including its population and conditions of use."
+        )
+    if flags['individualized']:
+        lines.append(
+            "- Individualized advice: do NOT recommend any dose increase, decrease, or other change for this specific patient. "
+            "Explain that dose decisions rest with the treating physician, guided by the full Prescribing Information and clinical judgment, "
+            "and suggest a case discussion with an MSL."
+        )
+    if flags['off_label']:
+        lines.append(
+            "- Population under 18 or off-label use: do not give a dose or dosing guidance. "
+            "Say this is outside what you can advise on and recommend connecting with an MSL."
+        )
+    if flags['comparative']:
+        lines.append(
+            f"- Comparison request: give a brief, neutral description of each medicine. Describe {brand_name} from the provided context. "
+            f"Describe {comparator or 'the other medicine named in the question'} from general knowledge of the medicine. "
+            "Never say or imply that one medicine is more effective, better, superior, or an advancement over the other. "
+            "Do not give numerical results for either medicine, and do not mention trial figures. "
+            "Keep the answer to a few sentences and do not add a risk section."
+        )
+    if flags['efficacy']:
+        lines.append(
+            "- Efficacy: summarize only the efficacy results documented in the context."
+        )
+        if not flags['comparative']:
+            lines.append(
+                "- End the answer with a paragraph that starts with 'Risk information:'. In it, name the contraindications "
+                f"(for example hypersensitivity to {brand_name} or any of its excipients) and the warnings and precautions documented in the context"
+                + (" (for example monitoring for cerebral edema and vivid dream states)" if brand_name == 'Synapta' else "")
+                + ", in plain language. "
+                "Do not write only a general instruction to review risks. If the context documents none, say so."
+            )
+        if not flags['dosage'] and not flags['individualized']:
+            lines.append(
+                "- Do not include dosing, administration, or titration details in an efficacy answer unless the question asks for them."
+            )
+    if not hcp:
+        lines = [l for l in lines if "Prescribing Information" not in l]
+    return "\n".join(lines) + "\n"
+
+
+# Folder that holds the uploaded document files (one sub-folder per upload, e.g.
+# /apps/ebuddy/veeva_microsites/<uuid>/PI_SYNAPTA.docx). Override with PI_MICROSITE_ROOT.
+_MICROSITE_ROOT = os.getenv('PI_MICROSITE_ROOT', '/apps/ebuddy/veeva_microsites')
+_path_cache = {}
+
+
+def _discover_document_path(filename):
+    """Find a document file on this server by file name when the DB row has no document_path.
+
+    This is why Synapta's PI opened but Verveen's/Kinetix's did not: only Synapta had a path.
+    """
+    if not filename:
+        return None
+    if filename in _path_cache:
+        return _path_cache[filename]
+    found = None
+    try:
+        matches = sorted(glob.glob(os.path.join(_MICROSITE_ROOT, '*', filename)))
+        if not matches:
+            matches = sorted(glob.glob(os.path.join(_MICROSITE_ROOT, '**', filename), recursive=True))
+        found = matches[0].replace('\\', '/') if matches else None
+    except Exception as e:
+        print(f"[pi] path discovery failed for {filename}: {e}")
+    print(f"[pi] discover {filename} in {_MICROSITE_ROOT} -> {found}")
+    if found:
+        _path_cache[filename] = found   # misses are not cached, so a later upload is picked up
+    return found
+
+
+_index_paths = {"loaded": False, "by_id": {}, "by_name": {}, "id_name": {}, "failed_at": 0.0}
+
+
+async def _load_index_paths(domain, db):
+    """Read file paths straight from the search index (the same place the bot got the PULSE-III path).
+
+    Every indexed document carries its document_unique_id, filename and server path, so this gives
+    the PI paths for Verveen and Kinetix without hardcoding or a database row.
+    """
+    if _index_paths["loaded"]:
+        return _index_paths
+    if time.time() - _index_paths["failed_at"] < 60:
+        return _index_paths
+    try:
+        index = FAISS.load_local(
+            _get_index_folder(domain), await get_azure_embeddings(db), "index",
+            allow_dangerous_deserialization=True
+        )
+        by_id, by_name, id_name = {}, {}, {}
+        for doc in index.docstore._dict.values():
+            md = doc.metadata or {}
+            path = next((v for v in md.values() if isinstance(v, str) and v.startswith('/apps/')), None)
+            if not path:
+                m = _SERVER_PATH_RE.search((doc.page_content or '')[:1000])
+                path = m.group(0) if m else None
+            did = md.get('document_unique_id')
+            name = md.get('filename') or (os.path.basename(path) if path else None)
+            if did and name:
+                id_name[str(did)] = str(name)
+            if not path:
+                continue
+            if did:
+                by_id[str(did)] = path
+            by_name[str(name or os.path.basename(path)).lower()] = path
+            by_name[os.path.basename(path).lower()] = path
+        _index_paths.update(loaded=True, by_id=by_id, by_name=by_name, id_name=id_name)
+        print(f"[pi] index paths loaded: {len(by_id)} by id, {len(by_name)} by name")
+    except Exception as e:
+        _index_paths["failed_at"] = time.time()
+        print(f"[pi] could not read paths from index: {e}")
+    return _index_paths
+
+
+async def _complete_sources(rows, doc_ids, domain, db):
+    """Make sure every cited/retrieved document appears in "View source documents".
+
+    Documents the database has no row for are rebuilt from the search index (file name + path),
+    and duplicates are removed.
+    """
+    rows = list(rows or [])
+    have = {str(r.get('document_id')) for r in rows}
+    missing = [str(d) for d in (doc_ids or []) if str(d) not in have]
+    if missing:
+        idx = await _load_index_paths(domain, db)
+        for d in missing:
+            path = idx["by_id"].get(d)
+            name = idx["id_name"].get(d) or (os.path.basename(path) if path else None)
+            if not name:
+                print(f"[sources] no row and no index entry for document {d}")
+                continue
+            rows.append({
+                "id": None, "document_id": d, "filename": name,
+                "document_path": path, "microsite_path": None, "page_number": None,
+            })
+    # Each database row is its own source (its id is what opens the microsite), so only exact
+    # duplicates (same document and same row id) are removed. Rows are never merged: a row's id
+    # must stay paired with its own microsite_path.
+    seen, out = set(), []
+    for r in rows:
+        key = (str(r.get('document_id')), str(r.get('id')))
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(r)
+    return out
+
+
+def _looks_like_pi(name):
+    n = (name or '').lower()
+    return bool(re.search(r'(^|[^a-z])pi([^a-z]|$)', n) or 'prescrib' in n)
+
+
+def _discover_brand_pi_path(brand_key):
+    """Fuzzy fallback: any .docx/.pdf under the microsite root whose name has the brand and 'PI'/'prescribing'."""
+    cache_key = f"brand:{brand_key}"
+    if cache_key in _path_cache:
+        return _path_cache[cache_key]
+    found = None
+    try:
+        root_depth = _MICROSITE_ROOT.rstrip('/').count('/')
+        for dirpath, dirnames, filenames in os.walk(_MICROSITE_ROOT):
+            if dirpath.rstrip('/').count('/') - root_depth >= 2:
+                dirnames[:] = []
+            for fn in sorted(filenames):
+                low = fn.lower()
+                if brand_key in low and _looks_like_pi(low) and low.endswith(('.docx', '.pdf')):
+                    found = os.path.join(dirpath, fn).replace('\\', '/')
+                    break
+            if found:
+                break
+    except Exception as e:
+        print(f"[pi] brand discovery failed for {brand_key}: {e}")
+    print(f"[pi] brand-discover {brand_key} in {_MICROSITE_ROOT} -> {found}")
+    if found:
+        _path_cache[cache_key] = found
+    return found
+
+
+def _resolve_brand_key(query, refined_query='', conversation_history=None):
+    """Brand key ('synapta' / 'verveen' / 'kinetix') for this turn, or None.
+
+    Order: the user's own message -> the refined (standalone) query -> earlier turns.
+    """
+    brand = (
+        _detect_brand(query or '')
+        or _detect_brand(refined_query or '')
+        or _detect_brand_from_history(conversation_history or [])
+    )
+    if not brand:
+        return None
+    for key, cfg in BRAND_CONFIG.items():
+        if cfg['display_name'] == brand['display_name']:
+            return key
+    return None
+
+
+async def _get_pi_document(db, brand_key, domain='hls'):
+    """Build the PI button payload for a brand, or None if that brand has no usable PI.
+
+    The UI renders this as a button and opens the file in place via the same
+    view_file call it uses for source documents.
+    """
+    cfg = BRAND_PI_CONFIG.get(brand_key)
+    if not cfg:
+        return None
+    brand = BRAND_CONFIG[brand_key]
+
+    row = None
+    try:
+        rows = await _lookup_sources(db=db, doc_ids=[cfg['document_id']], domain=domain)
+        if not rows:
+            # The configured id is not in this server's database: try the brand's other known
+            # documents and keep one that is a PI by file name.
+            alt = [i for i in BRAND_SOURCE_DOCUMENT_IDS.get(brand_key, []) if str(i) != str(cfg['document_id'])]
+            if alt:
+                rows = [r for r in await _lookup_sources(db=db, doc_ids=alt, domain=domain)
+                        if _looks_like_pi(r.get('filename'))]
+        row = dict(rows[0]) if rows else None
+    except Exception as pi_err:
+        print(f"PI document lookup failed for {brand_key}: {pi_err}")
+
+    doc = row or {
+        "id": None,
+        "document_id": cfg['document_id'],
+        "filename": cfg['filename'],
+        "document_path": None,
+        "microsite_path": None,
+    }
+    if not doc.get("document_path") and cfg.get('document_path'):
+        doc["document_path"] = cfg['document_path']
+    if not doc.get("document_path"):
+        idx = await _load_index_paths(domain, db)
+        found = idx["by_id"].get(str(cfg['document_id'])) or idx["by_name"].get(
+            str(doc.get("filename") or cfg['filename']).lower())
+        if not found:
+            found = next((p for n, p in idx["by_name"].items()
+                          if brand_key in n and _looks_like_pi(n)), None)
+        print(f"[pi] index lookup {brand_key} -> {found}")
+        if found:
+            doc["document_path"] = found
+            doc["filename"] = os.path.basename(found)
+    if not doc.get("document_path"):
+        doc["document_path"] = _discover_document_path(doc.get("filename") or cfg['filename'])
+    if not doc.get("document_path"):
+        doc["document_path"] = _discover_brand_pi_path(brand_key)
+        if doc["document_path"]:
+            doc["filename"] = os.path.basename(doc["document_path"])
+
+    if not (doc.get("document_path") or doc.get("microsite_path") or doc.get("id")):
+        print(f"[pi] WARNING: no path/id for {brand_key} PI (doc {cfg['document_id']}); "
+              f"set PI_PATH_{brand_key.upper()} or fix the DB row. Button still returned.")
+
+    doc["document_id"] = doc.get("document_id") or cfg['document_id']
+    doc["page_number"] = None
+    doc["type"] = "prescribing_information"
+    doc["brand"] = brand['display_name']
+    doc["label"] = f"{brand['display_name']} Prescribing Information"
+    doc["open_in_place"] = True
+    doc["is_pi"] = True
+    print(f"[pi] button -> brand={brand_key} doc={doc['document_id']} path={doc.get('document_path')} id={doc.get('id')}")
+    return doc
+
+
+def _pi_access_line(brand_name):
+    # Text fallback, used only when the PI document itself cannot be attached.
+    return (
+        "For complete dosing, warnings, and safety details, please see the full "
+        f"Prescribing Information for {brand_name}, which your Aetheris BioGroup medical team can provide."
+    )
+
+
+def _risk_line(brand_name):
+    return (
+        f"Risk information: please review the risks, warnings, and contraindications "
+        f"for {brand_name} in its Prescribing Information before making any treatment decision."
+    )
+
+
+def _apply_compliance_footer(answer, flags, brand_name, pi_available=False):
+    text = (answer or '').rstrip()
+    lower = text.lower()
+    additions = []
+    if flags['pi_required'] and not pi_available:
+        additions.append(_pi_access_line(brand_name))
+    if additions:
+        text = "\n\n".join([text] + additions)
+    return text
+
+
+# ---------------------------------------------------------------------------
+# Fixes: stable HCP detection, adverse-event rules, first-turn intro
+# ---------------------------------------------------------------------------
+_HCP_SELF_ID_RE = re.compile(
+    r"\bi\s*(?:am|'m)\s+an?\s+(?:physician|doctor|hcp|clinician|nurse|pharmacist|specialist|neurologist)\b"
+    r"|\bi\s+(?:have\s+)?prescribed\b|\bmy\s+patients?\b",
+    re.IGNORECASE,
+)
+_MILD_RE = re.compile(r'\b(mild|minor|slight|slightly)\b', re.IGNORECASE)
+_SEVERE_RE = re.compile(r'\b(severe|serious|worst|unbearable|intense|worsening|persistent)\b', re.IGNORECASE)
+
+# Policy switch: when True, an HCP describing a symptom in a named patient (drug + patient +
+# event) is flagged as an AE even when asking "is this expected?". Matches pharmacovigilance practice.
+HCP_QUERY_IS_AE = True
+
+_NO_AE = {
+    "isAdverseEvent": False, "isEmergency": False, "product_name": None, "event_text": None,
+    "actual_event_asserted": False, "negated": False, "hypothetical": False,
+    "confidence": 0.0, "needs_adverse_review": False,
+}
+
+GENERIC_BRAND = {
+    'display_name': 'Aetheris BioGroup',
+    'therapeutic_area': 'Healthcare',
+    'tone': 'Warm, clear, and professional',
+    'empathy_style': "warm and caring, acknowledging the person's concern before answering",
+}
+
+
+def _count_prior_user_turns(conversation_history):
+    """User turns before the current message (the frontend appends the current one last)."""
+    if not conversation_history:
+        return 0
+    if isinstance(conversation_history, str):
+        lines = [l for l in conversation_history.split('\n') if l.strip()][:-1]
+        return sum(1 for l in lines if re.match(r'\s*(user|human)\s*:', l, re.IGNORECASE))
+    if isinstance(conversation_history, list):
+        return sum(1 for m in conversation_history[:-1]
+                   if isinstance(m, dict) and str(m.get('role', '')).lower() in ('user', 'human'))
+    return 0
+
+
+def _intro_line(brand_key, is_hcp):
+    cfg = BRAND_CONFIG.get(brand_key) or {}
+    persona = cfg.get('hcp_persona' if is_hcp else 'patient_persona',
+                      MEDICAL_TEAM_PERSONA if is_hcp else PATIENT_SUPPORT_PERSONA)
+    team = 'Medical Team' if is_hcp else 'Patient Support Team'
+    return f"Hello! I'm {persona} from the {cfg.get('display_name', 'Aetheris BioGroup')} {team}. I'm happy to help."
+
+
+def _is_medical_query(query):
+    """True when the message is about symptoms, dosing, or product safety (never a support ticket)."""
+    f = _compliance_flags(query)
+    if f['dosage'] or f['individualized'] or f['off_label'] or f['comparative']:
+        return True
+    return bool(detect_adverse_event(query, '').get('needs_adverse_review'))
+
+
+# Greeting policy: True = greet on every message, False = greet on the first message of a chat
+# (and when the person switches between doctor and patient).
+GREET_EVERY_MESSAGE = False
+
+
+async def _is_first_turn(db, session_uuid, conversation_history):
+    """First message of the conversation: no saved history and no earlier user turn from the frontend."""
+    if _count_prior_user_turns(conversation_history) > 0:
+        return False
+    if session_uuid:
+        try:
+            row = await db.execute(
+                select(HLSChatbotHistory).where(HLSChatbotHistory.session_uuid == session_uuid)
+            )
+            return row.first() is None
+        except Exception:
+            return True
+    return True
+
+
+async def hls_chat_helper(
+    request: Request,
+    db: AsyncSession = None
+):
+    db = AsyncSessionLocal()
+    data = await request.json()
+    # Prefer the real client IP from proxy headers over the immediate connection host
+    forwarded_for = request.headers.get("X-Forwarded-For")
+    if forwarded_for:
+        ip_address = forwarded_for.split(",")[0].strip()
+    else:
+        ip_address = request.headers.get("X-Real-IP") or request.client.host
+    if ip_address == '127.0.0.1':
+        ip_address = data.get("ip_address", ip_address) 
+    result = await process_hls_chat(data, db, ip_address)
+
+    return JSONResponse(
+        content=result,
+        status_code=200
+    )
+def is_corporate_query(query: str):
+    q = query.lower()
+
+    keywords = [
+        "financial",
+        "finance",
+        "revenue",
+        "profit",
+        "eps",
+        "roi",
+        "projection",
+        "forecast",
+        "stock",
+        "invest",
+        "investment",
+        "share price",
+        "market cap",
+        "cfo",
+        "ceo",
+        "executive",
+        "leadership",
+    ]
+
+    return any(re.search(r'\b' + re.escape(k) + r'\b', q) for k in keywords)
+def generate_support_first_question(query, llm):
+
+    prompt = """
+You are a customer support assistant.
+
+The user has reported an issue.
+
+Your job:
+
+1. Start with empathy.
+2. Ask ONLY the single most important first troubleshooting question.
+3. Do NOT ask multiple questions.
+4. Do NOT provide a solution yet.
+5. Keep the response short and conversational.
+
+Examples:
+
+User:
+I cannot login
+Response:
+I'm sorry you're experiencing this issue.
+Could you tell me what error message you see when attempting to log in?
+User:
+Invalid Username
+Response:
+I'm sorry you're experiencing this issue.
+Can you please check your username clearly and enter it once again and tell me the result?
+User:
+I forgot my password
+
+Response:
+I'm sorry you're experiencing this issue.
+
+Are you receiving any password reset email when you request a reset?
+
+User:
+I didn't receive my product
+
+Response:
+I'm sorry you're experiencing this issue.
+
+Could you please share your order number or tracking information?
+
+User:
+My payment failed
+
+Response:
+I'm sorry you're experiencing this issue.
+
+Did you receive any payment error message or transaction reference?
+
+Return ONLY valid JSON.
+
+{{
+    "response": "<response>"
+}}
+"""
+
+    chain = (
+        ChatPromptTemplate.from_messages([
+            ("system", prompt),
+            ("human", "{query}")
+        ])
+        | llm
+        | StrOutputParser()
+    )
+
+    try:
+        response = chain.invoke({"query": query})
+        result = json.loads(response)
+        return result.get("response")
+    except Exception:
+        return (
+            "I'm sorry you're experiencing this issue. "
+            "Could you please provide more details about the problem?"
+        )
+def generate_support_followup_question(
+    original_issue,
+    previous_answers,
+    previous_questions,
+    current_stage,
+    llm
+):
+    prompt = """
+You are a customer support assistant.
+IMPORTANT:
+- Do NOT repeat previous questions.
+- Do NOT repeat empathy statements.
+- Do NOT start with "I'm sorry you're experiencing this issue".
+- Use previous answers to generate the next question.
+- Ask exactly one question.
+- If enough information is available, return show_create_ticket_button=true.
+The user is already in a troubleshooting flow.
+Rules:
+- Ask ONLY one question.
+- Ask a different question each time.
+- Maximum 3 questions total.
+- Stage 2 = second troubleshooting question.
+- Stage 3 = third troubleshooting question.
+- Stage 4 = stop asking questions and recommend ticket creation.
+Return ONLY valid JSON.
+For Stage 2:
+{{
+    "response": "<second question>",
+    "next_stage": 2,
+    "show_create_ticket_button": false
+}}
+
+For Stage 3:
+{{
+    "response": "<third question>",
+    "next_stage": 3,
+    "show_create_ticket_button": false
+}}
+
+For Stage 4:
+{{
+    "response": "I am sorry for the inconvenience . This issue requires Support Team Assitance. Can i create a support ticket for you ?",
+    "next_stage": 4,
+    "show_create_ticket_button": true
+}}
+"""
+
+    chain = (
+        ChatPromptTemplate.from_messages([
+            ("system", prompt),
+            ("human",
+             """
+Original Issue:
+{original_issue}
+
+Previous Answers:
+{previous_answers}
+
+Previous Questions:
+{previous_questions}
+Current Stage:
+{current_stage}
+             """)
+        ])
+        | llm
+        | StrOutputParser()
+    )
+
+    try:
+        response = chain.invoke({
+            "original_issue": original_issue,
+            "previous_answers": previous_answers,
+            "previous_questions": previous_questions,
+            "current_stage": current_stage
+        })
+
+        return json.loads(response)
+
+    except Exception:
+        return {
+            "response": "Thank you for the information.",
+            "next_stage": current_stage ,
+            "show_create_ticket_button": False
+        }
+async def create_support_ticket(
+    db,
+    support_issue,
+    support_answers,
+    support_questions,
+    user,
+    ip_address,
+    domain="hls"
+):
+    conversation_summary = []
+    from itertools import zip_longest
+    for q, a in zip_longest(
+        support_questions,
+        support_answers,
+        fillvalue=""
+    ):
+        conversation_summary.append(
+            f"Question: {q}\nAnswer: {a}"
+        )
+    issue_description = "\n\n".join(conversation_summary)
+    print("CREATING SUPPORT TICKET")
+    print("ISSUE =", support_issue)
+    print("ANSWERS =", support_answers)
+    print("QUESTIONS =", support_questions)
+    result = await db.execute(
+        select(SupportTicket).order_by(SupportTicket.id.desc())
+        .limit(1)
+    )
+    last_ticket = result.scalar_one_or_none()
+    next_number = 1 if not last_ticket else last_ticket.id + 1
+    ticket = SupportTicket(
+        ticket_id=f"HLS{next_number:03d}",
+        user_name=user.get("name") if user else None,
+        user_email=user.get("email") if user else None,
+        domain=domain,
+        original_question=support_issue,
+        issue_description=issue_description,
+        ipaddress=ip_address
+    )
+    db.add(ticket)
+    await db.commit()
+    await db.refresh(ticket)
+    print("USER =", user)
+    print("TICKET CREATED =", ticket.ticket_id)
+    return ticket
+
+
+async def process_hls_chat(
+    data,
+    db: AsyncSession = None,
+    ip_address = None,
+):
+    db = AsyncSessionLocal()
+    try:
+        query = data.get('query')
+        conversation_history = data.get('conversation_history', [])
+        domain = data.get('domain', 'hls')
+        support_stage = data.get("support_stage")
+        support_issue = data.get("support_issue")
+        support_answers = data.get("support_answers", [])
+        support_questions = data.get("support_questions", [])
+
+        if not query:
+            return {
+                "error": "Missing 'query' parameter."
+            }
+        llm = await initialize_5o_mini(db, domain)
+        is_first_turn = await _is_first_turn(db, data.get("session_uuid"), conversation_history)
+        if support_stage:
+            if support_stage == 4:
+                if query.strip().lower() in ["yes", "y", "create ticket" , "ok", "please create ticket" , "sure", "go ahead" , "yeah" , "please do"]:
+                    ticket = await create_support_ticket(
+                        db,
+                        support_issue=support_issue,
+                        support_answers=support_answers,
+                        support_questions=support_questions,
+                        user=data.get("user"),
+                        ip_address=ip_address,
+                        domain=domain
+                    )
+                    return {
+                        "response": (
+                            f"Your support ticket has been created successfully. "
+                            f"Ticket ID: {ticket.ticket_id}\n\n"
+                            f"Our support team will review the issue and contact you if needed."
+                          ),
+                        "ticket_created": True,
+                        "ticket": {
+                            "ticket_id": ticket.ticket_id,
+                            "user_name": ticket.user_name,
+                            "user_email": ticket.user_email,
+                            "original_question": ticket.original_question,
+                            "issue_description": ticket.issue_description,
+                            "created_at": str(ticket.created_at)
+                     }
+                    }
+
+            support_answers.append(query)
+            print("SUPPORT STAGE =", support_stage)
+            print("SUPPORT ANSWERS =", support_answers)
+            # Stop after 3 questions
+            if support_stage >= 3:
+                return {
+                    "response": (
+                        "I am sorry for the inconvenience. "
+                        "Based on the information you provided, this issue requires Support Team Assistance. "
+                        "Can I create a support ticket for you?"
+                    ),
+                    "support_stage": 4,
+                    "support_issue": support_issue,
+                    "support_answers": support_answers,
+                    "support_questions": support_questions,
+                    "show_create_ticket_button": True
+                }
+            result = generate_support_followup_question(
+                original_issue=support_issue,
+                previous_answers=support_answers,
+                previous_questions=support_questions,
+                current_stage=support_stage + 1,
+                llm=llm
+            )
+            next_question = result["response"]
+            support_questions.append(next_question)
+            return {
+                "response": next_question,
+                "support_stage": support_stage + 1,
+                "support_issue": support_issue,
+                "support_answers": support_answers,
+                "support_questions": support_questions,
+                "show_create_ticket_button": False
+            }
+        intent = classify_user_intent(
+             query,
+             conversation_history,
+             llm
+            )
+        print("QUERY =", query)
+        if intent == "support" and _is_medical_query(query):
+            intent = "knowledge"      # a symptom or dose question must never open a support ticket flow
+        print("INTENT =", intent)
+        if intent == "support":
+            first_question = generate_support_first_question(
+                query,
+                llm
+            )
+            if GREET_EVERY_MESSAGE or is_first_turn:
+                _bk = _resolve_brand_key(query, '', conversation_history)
+                first_question = _intro_line(_bk, False) + "\n\n" + first_question
+            return {
+                "response": first_question,
+                "support_stage": 1,
+                "support_issue": query,
+                "support_answers": [],
+                "support_questions": [first_question],
+                "show_create_ticket_button": False
+            }
+
+        system_prompt = DOMAIN_SYSTEM_PROMPTS.get(domain, HLS_SYSTEM_PROMPT)
+        greeting = DOMAIN_GREETINGS.get(domain, DOMAIN_GREETINGS['hls'])
+
+        if re.sub(r'\s+', ' ', query.strip().lower()) in greeting_phrases:
+            return {
+                "response": greeting
+            }
+
+        # Journey detection: LLM classifies the current message; DB provides the baseline
+        # so the session stays in the established journey when the user asks generic questions.
+        session_uuid = data.get("session_uuid")
+        stored_journey = await _get_stored_journey(session_uuid, db)
+        stored_is_hcp = (stored_journey == 'hcp')
+        llm_journey = 'hcp' if _HCP_SELF_ID_RE.search(query) else _classify_journey_llm(query, conversation_history, llm)
+        if llm_journey in ('hcp', 'patient'):
+            is_hcp = (llm_journey == 'hcp')
+            journey_switched = (is_hcp != stored_is_hcp)
+        else:
+            is_hcp = stored_is_hcp
+            journey_switched = False
+
+        try:
+            refined_query = _refine_query(
+                query,
+                conversation_history,
+                llm
+            )
+
+        except Exception as e:
+            return {
+                "error": f"Error during query refinement: {str(e)}"
+            }
+
+        try:
+            context, retrieved_doc_ids = await _find_match(
+                refined_query,
+                domain,
+                db
+            )
+
+            print("CONTEXT=", context)
+
+        except Exception as e:
+            return {
+                "error": f"Error during FAISS search: {str(e)}"
+            }
+
+        # Apply a brand-specific prompt only when the user has explicitly named
+        # a brand — in the current query or somewhere earlier in the session.
+        # NEVER infer a brand from FAISS-retrieved document chunks; doing so
+        # would cause the bot to introduce itself as "Maya from Synapta" when
+        # the patient just said "I got diarrhea after taking my medicine."
+        needs_greeting = bool(GREET_EVERY_MESSAGE or is_first_turn or journey_switched)
+
+        if domain == 'hls' and not isinstance(context, dict):
+            # The frontend appends the current user message to conversation_history
+            # before the API call, so we must exclude it when deciding whether the
+            # brand was established in a *previous* turn.  Strip the last line
+            # (always "user: <current message>") before scanning for prior brand.
+            if isinstance(conversation_history, str) and conversation_history:
+                last_newline = conversation_history.rfind('\n')
+                prior_history = conversation_history[:last_newline] if last_newline >= 0 else ''
+            else:
+                prior_history = conversation_history
+            previous_brand = _detect_brand_from_history(prior_history)
+            detected_brand = _detect_brand(refined_query)
+            # Active brand: current query wins; fall back to the brand established
+            # earlier in this session so follow-up questions stay in context.
+            active_brand = detected_brand or previous_brand or (GENERIC_BRAND if is_first_turn else None)
+
+            if active_brand:
+                is_first_brand_message = is_first_turn
+                brand_switched = (
+                    detected_brand is not None and
+                    previous_brand is not None and
+                    detected_brand['display_name'] != previous_brand['display_name']
+                )
+
+                system_prompt = _build_hls_brand_prompt(
+                    active_brand, is_first_brand_message, brand_switched, is_hcp,
+                    journey_switched=journey_switched,
+                )
+
+        try:
+            # Augment system prompt to instruct caution around potential adverse events.
+            # run quick rules-based scan to decide if we should ask the LLM to be extra careful
+            flags = _compliance_flags(query)
+            if flags["comparative"]:
+                needs_review = False
+            else:
+                rules_scan = detect_adverse_event(query, conversation_history)
+                needs_review = rules_scan.get("needs_adverse_review", False)
+            ae_instruction = (
+                '\nAdverse event handling:\n'
+                '- Rules-based pre-scan flagged extra care = NEEDS_REVIEW_VAL.\n'
+                '- Do not mention adverse event reporting, phone numbers, or reporting channels in the answer. The system adds them when required.\n'
+                '- Set isAdverseEvent = true only when the user states that a symptom actually happened after using the product and the symptom is not mild.\n'
+                '- Set isAdverseEvent = false for general side-effect questions, hypothetical or negated statements, mild symptoms, and messages that mention no symptom.\n'
+                '\n'
+                'IMPORTANT OUTPUT FORMAT — return a single JSON object only:\n'
+                '{{\n'
+                '  "answer": "<human readable answer>",\n'
+                '  "sources": [{{"document_unique_id": "<id>", "page_number": <number|null>}}],\n'
+                '  "adverse_event_check": {{\n'
+                '    "isAdverseEvent": <true|false>,\n'
+                '    "isEmergency": <true|false>,\n'
+                '    "product_name": "<name or null>",\n'
+                '    "event_text": "<extracted sentence or null>",\n'
+                '    "actual_event_asserted": <true|false>,\n'
+                '    "negated": <true|false>,\n'
+                '    "hypothetical": <true|false>,\n'
+                '    "confidence": <0.0-1.0>\n'
+                '  }},\n'
+                '  "follow_ups": ["<q1>", "<q2>"],\n'
+                '  "show_msl_button": <true|false>\n'
+                '}}\n'
+                'Do NOT include text outside the JSON object.\n'
+            ).replace('NEEDS_REVIEW_VAL', str(needs_review)).replace('AE_PHONE_VAL', AE_REPORT_PHONE)
+
+            _prompt_key = _resolve_brand_key(query, refined_query, conversation_history)
+            _prompt_brand = BRAND_CONFIG[_prompt_key]['display_name'] if _prompt_key else 'this product'
+            _comparator = _comparator_name(query, _prompt_brand)
+            compliance_instruction = (
+                _build_compliance_instruction(
+                    _compliance_flags(query),
+                    _comparative_opening(query, _prompt_brand),
+                    hcp=is_hcp,
+                    brand_name=_prompt_brand,
+                    comparator=None if _comparator == "that medicine" else _comparator,
+                )
+                if domain == 'hls' else ""
+            )
+            augmented_system_prompt = (
+                (system_prompt or '') + "\n\n"
+                + (ae_instruction if domain == 'hls' else "")
+                + compliance_instruction
+            )
+            prompt = ChatPromptTemplate.from_messages([
+                ("system", augmented_system_prompt),
+                ("human", "Query: {input}\nContext: {context}")
+            ])
+
+            chain = prompt | llm | StrOutputParser()
+
+            raw_response = chain.invoke({
+                "input": refined_query,
+                "context": context
+            })
+
+        except Exception as e:
+            return {
+                "error": f"Error generating response: {str(e)}"
+            }
+
+        try:
+            llm_json = json.loads(raw_response)
+            answer = llm_json.get("response") or llm_json.get("answer") or raw_response
+            llm_sources = llm_json.get("sources", [])
+            follow_up_questions = llm_json.get("follow_ups", [])
+            llm_aec = llm_json.get("adverse_event_check")
+            show_msl_button = llm_json.get("show_msl_button", is_hcp)
+            corporate_query = is_corporate_query(query)
+            if corporate_query:
+                show_msl_button = False
+
+        except (json.JSONDecodeError, TypeError):
+            answer = raw_response
+            llm_sources = []
+            llm_aec = None
+            follow_up_questions = []
+            show_msl_button = is_hcp
+
+        answer = _scrub_internal_refs(answer)
+
+        doc_ids = list({
+            source.get("document_unique_id")
+            for source in llm_sources
+            if source.get("document_unique_id")
+        })
+        _early_flags = _compliance_flags(query)
+        brand_doc_ids = []
+
+        if is_hcp and (
+            _early_flags['pi_required']
+            or _early_flags['source_request']
+            or _early_flags['comparative']
+        ):
+            brand_doc_ids = get_brand_source_documents(
+                query,
+                conversation_history
+            )
+
+        doc_ids = list(
+            set(doc_ids)
+            | set(retrieved_doc_ids or [])
+            | set(brand_doc_ids)
+        )
+
+        db_sources = await _lookup_sources(
+            db=db,
+            doc_ids=doc_ids,
+            domain=domain
+        )
+        print(f"[sources] requested={sorted(str(d) for d in doc_ids)} "
+              f"returned={[str(src.get('document_id')) for src in (db_sources or [])]}")
+        db_sources = await _complete_sources(db_sources, doc_ids, domain, db)
+
+        page_map = {
+            source["document_unique_id"]: source.get("page_number")
+            for source in llm_sources
+            if source.get("document_unique_id")
+        }
+
+        # Fallback: first "--- PAGE X ---" marker in the retrieved chunks of each document, used when
+        # the model did not cite that document (sources now include retrieved-but-uncited documents).
+        _ctx_pages = {}
+        if isinstance(context, list):
+            for _chunk in context:
+                _did = str((_chunk.get("metadata") or {}).get("document_unique_id"))
+                _m = re.search(r"--- PAGE (\d+) ---", _chunk.get("page_content") or "")
+                if _m and _did not in _ctx_pages:
+                    _ctx_pages[_did] = int(_m.group(1))
+        page_map_str = {str(k): v for k, v in page_map.items()}
+
+        for src in db_sources:
+            page = page_map_str.get(str(src["document_id"]))
+            if page is None:
+                page = _ctx_pages.get(str(src["document_id"]))
+
+            if page is not None:
+                src["page_number"] = page
+
+        for src in db_sources:
+            print(f"[sources] doc={src.get('document_id')} id={src.get('id')} "
+                  f"microsite={bool(src.get('microsite_path'))} file={bool(src.get('document_path'))} "
+                  f"page={src.get('page_number')}")
+
+        # Adverse event detection always runs. The corporate-query filter must never
+        # suppress a reported adverse event (one message can mention "financial support"
+        # and a symptom together).
+        # Conservative merge: flag an adverse event if EITHER the LLM or the
+        # rules-based detector sees a symptom experienced after product use.
+        flags = _compliance_flags(query)
+
+        if flags['comparative']:
+            adverse_event_check = dict(_NO_AE)
+        else:
+            rules_check = detect_adverse_event(query, conversation_history)
+            adverse_event_check = dict(llm_aec) if isinstance(llm_aec, dict) else dict(rules_check)
+            ae = bool(rules_check.get('isAdverseEvent'))
+            if isinstance(llm_aec, dict) and rules_check.get('needs_adverse_review'):
+                ae = ae or bool(llm_aec.get('isAdverseEvent'))    # LLM may confirm only if a symptom word is present
+            if _MILD_RE.search(query) and not _SEVERE_RE.search(query):
+                ae = False                                        # mild symptom
+            if is_hcp and not HCP_QUERY_IS_AE and not rules_check.get('isEmergency'):
+                ae = False
+            adverse_event_check['isAdverseEvent'] = ae
+        is_adverse_event = bool(adverse_event_check.get('isAdverseEvent'))
+
+        # ---- Compliance post-processing (HLS only) ----
+        pi_document = None
+        if domain == 'hls':
+            flags = _compliance_flags(query)
+            brand_key = _resolve_brand_key(query, refined_query, conversation_history)
+            if brand_key is None:
+                # Last resort for the PI button only: a single brand among the retrieved documents.
+                _hits = {
+                    k for k, ids in BRAND_SOURCE_DOCUMENT_IDS.items()
+                    if {str(i) for i in (retrieved_doc_ids or [])} & {str(i) for i in ids}
+                }
+                if len(_hits) == 1:
+                    brand_key = _hits.pop()
+            brand_name = (
+                BRAND_CONFIG[brand_key]['display_name'] if brand_key
+                else _compliance_brand_name(query, conversation_history)
+            )
+
+            # PI button: HCP journey only, for the brand being discussed (Synapta -> Synapta PI,
+            # Verveen -> Verveen PI). Off-label/pediatric dosing is routed to an MSL, so no PI there.
+            pi_eligible = (
+                is_hcp
+                and brand_key is not None
+                and not flags['comparative']
+                and not (flags['off_label'] and flags['dosage'])
+            )
+            pi_needed = pi_eligible
+            if not is_hcp:
+                # Patients get no PI *button* (pi_document stays None). Their normal source citations
+                # are left alone, because the PI is often the document the answer was drawn from.
+                if HIDE_PI_SOURCES_FOR_PATIENTS:
+                    db_sources = [
+                        src for src in (db_sources or [])
+                        if str(src.get("document_id")) not in PI_DOCUMENT_IDS
+                    ]
+            elif brand_key:
+                # HCP: never show another brand's PI (e.g. Synapta PI on a Verveen question).
+                _own = str(BRAND_PI_CONFIG[brand_key]['document_id'])
+                db_sources = [
+                    src for src in (db_sources or [])
+                    if str(src.get("document_id")) not in PI_DOCUMENT_IDS
+                    or str(src.get("document_id")) == _own
+                ]
+            if pi_needed:
+                pi_document = await _get_pi_document(db, brand_key, domain)
+                if pi_document is not None:
+                    # Also list the PI first in `sources`, flagged is_pi, so a UI that only renders
+                    # sources still shows it; the button reads `pi_document`.
+                    db_sources = [pi_document] + [
+                        src for src in (db_sources or [])
+                        if str(src.get("document_id")) != str(pi_document["document_id"])
+                    ]
+
+            if flags["individualized"]:
+                if is_hcp:
+                    reply = (
+                        "I cannot provide patient-specific dosing advice or recommend dose "
+                        "increases, decreases, or treatment adjustments for an individual "
+                        "patient.\n\n"
+                        "Dose decisions should be made by the treating physician based on "
+                        "the patient's clinical condition, approved Prescribing Information, "
+                        "and professional medical judgment.\n\n"
+                        f"For patient-specific clinical questions, please contact a "
+                        f"{brand_name} Medical Science Liaison (MSL)."
+                    )
+                else:
+                    reply = (
+                        "I can't advise on changing your dose. Please don't adjust it on your own; "
+                        "your prescribing doctor is the right person to decide that, based on how "
+                        "you're doing and your prescribing information.\n\n"
+                        "Please reach out to your doctor as soon as you can."
+                    )
+                if needs_greeting:
+                    reply = _intro_line(brand_key, is_hcp) + "\n\n" + reply
+                if is_adverse_event:
+                    reply += "\n\n" + _AE_FOLLOW_UP.format(brand=brand_name, phone=AE_REPORT_PHONE)
+                return {
+                    "response": reply,
+                    "sources": db_sources,
+                    "adverse_event_check": adverse_event_check,
+                    "follow_up_questions": [],
+                    "show_msl_button": bool(is_hcp),
+                    "journey": "hcp" if is_hcp else "patient",
+                    "pi_document": pi_document,
+                }
+            if flags['comparative']:
+                answer = _comparison_reply(brand_name)
+                follow_up_questions = []
+            elif flags['off_label'] and flags['dosage']:
+                answer = _OFF_LABEL_RESPONSE.format(brand=brand_name)
+                db_sources = []
+                follow_up_questions = []
+
+            if flags['off_label'] or flags['comparative']:
+                show_msl_button = True
+            if needs_greeting and not answer.lstrip().lower().startswith(('hello', 'hi ', 'hi,', 'hi!')):
+                answer = _intro_line(brand_key, is_hcp) + "\n\n" + answer
+
+            footer_flags = {**flags, 'pi_required': pi_eligible}
+            answer = _apply_compliance_footer(
+                answer, footer_flags, brand_name, pi_available=pi_document is not None
+            )
+
+            if is_adverse_event and AE_REPORT_PHONE not in answer:
+                answer = answer + "\n\n" + _AE_FOLLOW_UP.format(
+                    brand=brand_name, phone=AE_REPORT_PHONE
+                )
+
+        # Store chatbot history for hls and zenseai domains
+        if domain in ('hls', 'zenseai'):
+            try:
+                user = data.get("user") or {}
+                user_name = user.get("name")
+                user_email = user.get("email")
+
+                # session_uuid was resolved at journey-detection time; generate
+                # a new one only if the client didn't send one.
+                session_uuid = session_uuid or str(_uuid.uuid4())
+                now = datetime.utcnow()
+
+                new_turns = [
+                    {"role": "user", "content": query, "timestamp": now.isoformat(),
+                     "journey": "hcp" if is_hcp else "patient"},
+                    {"role": "assistant", "content": answer, "timestamp": now.isoformat()},
+                ]
+
+                stmt = select(HLSChatbotHistory).where(HLSChatbotHistory.session_uuid == session_uuid)
+                result_row = await db.execute(stmt)
+                existing = result_row.scalar_one_or_none()
+
+                if existing:
+                    history = json.loads(existing.chat_history or "[]")
+                    history.extend(new_turns)
+                    existing.chat_history = json.dumps(history)
+                    existing.updated_at = now
+                    existing.adverse_event = existing.adverse_event or is_adverse_event
+                else:
+                    record = HLSChatbotHistory(
+                        session_uuid=session_uuid,
+                        chat_history=json.dumps(new_turns),
+                        timestamp=now,
+                        user_name=user_name,
+                        user_email=user_email,
+                        ipaddress=ip_address,
+                        domain=domain,
+                        adverse_event=is_adverse_event
+                    )
+                    db.add(record)
+
+                await db.commit()
+
+            except Exception as e:
+                return {
+                    "error": f"Failed inserting chat response in database {str(e)}"
+                }
+
+        # Attach known file paths to source documents that the database returned without one.
+        for _src in db_sources or []:
+            # Sources that have a microsite must keep opening as microsites; never backfill a file path.
+            if _src.get("microsite_path"):
+                continue
+            _known = KNOWN_DOCUMENT_PATHS.get(str(_src.get("document_id")))
+            if _known and not _src.get("document_path"):
+                _src["document_path"] = _known
+            if not _src.get("document_path") and not _src.get("microsite_path"):
+                _idx = await _load_index_paths(domain, db)
+                _src["document_path"] = (
+                    _idx["by_id"].get(str(_src.get("document_id")))
+                    or _discover_document_path(_src.get("filename"))
+                )
+
+        return {
+            "response": answer,
+            "refinedQuery": refined_query,
+            "sources": db_sources,
+            "adverse_event_check": adverse_event_check,
+            "follow_up_questions": follow_up_questions,
+            "journey": "hcp" if is_hcp else "patient",
+            "show_msl_button": show_msl_button,
+            "pi_document": pi_document,
+        }
+
+    except Exception as e:
+        return {
+            "error": f"Unexpected server error: {str(e)}"
+        }
+
+# ******************************** Helper ***************************
+# --- simple rules-based adverse event detector ---
+def detect_adverse_event(text: str, convo: str = ''):
+    t = text or ''   # current message only; history caused false AEs
+    t_low = t.lower()
+
+    ae_keywords = [
+        # Severe / emergency
+        'allergic', 'allergy', 'anaphylaxis', 'hives', 'swelling',
+        'shortness of breath', 'difficulty breathing', 'breathless', 'wheezing',
+        'chest pain', 'faint', 'fainted', 'loss of consciousness',
+        'seizure', 'convulsion', 'hemorrhage', 'tachycardia', 'edema',
+        # GI — frequently mentioned softly
+        'diarrhea', 'diarrhoea', 'loose stool', 'stomach ache', 'stomach pain',
+        'abdominal pain', 'abdominal cramp', 'stomach cramp', 'upset stomach',
+        'constipation', 'bloating', 'indigestion', 'heartburn', 'acid reflux',
+        'nausea', 'vomit', 'vomiting',
+        # Skin
+        'rash', 'itching', 'itch', 'redness', 'bruising', 'blistering',
+        # Neurological
+        'headache', 'migraine', 'dizziness', 'numbness', 'tingling',
+        'tremor', 'trembling', 'shaking', 'confusion', 'memory loss', 'brain fog',
+        # Systemic
+        'fever', 'chills', 'fatigue', 'tired', 'weakness', 'weak',
+        'bleeding', 'palpitations', 'swollen',
+        # Musculoskeletal
+        'muscle pain', 'muscle ache', 'joint pain', 'back pain', 'cramp', 'cramping',
+        # Vision / hearing
+        'blurred vision', 'vision change', 'hearing loss', 'tinnitus', 'ringing in ears',
+        # General welfare
+        'not feeling well', 'feeling sick', 'feeling unwell', 'feel worse', 'feeling worse',
+        'weight gain', 'weight loss', 'hair loss', 'alopecia', 'hot flash', 'night sweat',
+        'insomnia', 'sleep problem', 'anxiety', 'depression', 'mood change',
+        # Labels
+        'adverse event', 'side effect', 'side-effect', 'reaction', 'hospital',
+    ]
+
+    emergency_keywords = ['anaphylaxis', 'difficulty breathing', 'shortness of breath', 'chest pain', 'loss of consciousness', 'seizure', 'hospital']
+
+    negation_terms = ['no', 'not', 'never', "didn't", "doesn't", "isn't", "wasn't", 'without', 'none']
+    hypothetical_terms = ['if', 'could', 'might', 'may', 'would', 'should', 'possible', 'possibly', 'thinking']
+    first_person_terms = ['i ', "i'm", "i'm having", 'i am', 'i have', 'i had', 'my ', 'we ', "we're", "our "]
+
+    keyword_matches = []
+    for kw in ae_keywords:
+        if re.search(r'\b' + re.escape(kw), t_low):
+            keyword_matches.append(kw)
+
+    # flag whether rules-based detector notices anything that warrants extra care
+    needs_adverse_review = bool(keyword_matches)
+
+    # basic negation detection: look for negation within 5 words before keyword
+    negated = False
+    for kw in keyword_matches:
+        # find all occurrences
+        for m in re.finditer(re.escape(kw), t_low):
+            start = max(0, m.start() - 100)
+            window = t_low[start:m.start()]
+            if any(re.search(r'\b' + nt + r'\b', window) for nt in negation_terms):
+                negated = True
+
+    # hypothetical detection: presence of hypothetical terms near keyword or overall
+    hypothetical = any(re.search(r'\b' + ht + r'\b', t_low) for ht in hypothetical_terms)
+
+    # actual event asserted: basic check for first-person experience verbs near keywords
+    # Label words ("side effect", "adverse event", "reaction") describe a topic, not an event.
+    # An event needs a real symptom keyword, so a general question about side effects is not flagged.
+    label_terms = {'adverse event', 'side effect', 'side-effect', 'reaction'}
+    event_keywords = [kw for kw in keyword_matches if kw not in label_terms]
+
+    actual_event_asserted = False
+    if any(fp in t_low for fp in first_person_terms) and event_keywords and not negated and not hypothetical:
+        actual_event_asserted = True
+
+    is_emergency = any(kw in t_low for kw in emergency_keywords)
+
+    # extract simple product name heuristics: look for 'after taking X', 'taking X', 'on X', 'from X'
+    product_name = None
+    m = re.search(r'(?:after taking|after use of|after using|after|taking|on|from)\s+([A-Za-z0-9\-\_\.]+)', text, re.IGNORECASE)
+    if m:
+        product_name = m.group(1)
+    else:
+        # try to find capitalized token near 'drug' or 'medication'
+        m2 = re.search(r'(?:drug|medication|product)\s+([A-Za-z0-9\-\_\.]+)', text, re.IGNORECASE)
+        if m2:
+            product_name = m2.group(1)
+
+    # event_text: best-effort extract sentence containing the keyword
+    event_text = None
+    if keyword_matches:
+        # find first sentence with keyword
+        sentences = re.split(r'[\.!?]\s+', text)
+        for s in sentences:
+            if any(kw in s.lower() for kw in keyword_matches):
+                event_text = s.strip()
+                break
+
+    # confidence scoring heuristic
+    score = 0.0
+    if keyword_matches:
+        score += 0.4
+    if actual_event_asserted:
+        score += 0.3
+    if is_emergency:
+        score += 0.2
+    if negated:
+        score -= 0.6
+    if hypothetical:
+        score -= 0.3
+
+    confidence = max(0.0, min(1.0, round(score, 2)))
+
+    isAdverseEvent = bool(keyword_matches) and actual_event_asserted and not negated and not hypothetical and confidence >= 0.2
+
+    return {
+        'isAdverseEvent': isAdverseEvent,
+        'isEmergency': bool(is_emergency),
+        'product_name': product_name,
+        'event_text': event_text,
+        'actual_event_asserted': actual_event_asserted,
+        'negated': negated,
+        'hypothetical': hypothetical,
+        'confidence': confidence,
+        'needs_adverse_review': needs_adverse_review,
+    }
