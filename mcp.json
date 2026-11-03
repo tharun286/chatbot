@@ -1,0 +1,50 @@
+{
+  "servers": {
+    "zenseai-local": {
+      "type": "stdio",
+      "command": "C:\\Users\\GT127774\\AppData\\Local\\Programs\\Python\\Python314\\Scripts\\uv.exe",
+      "args": [
+        "run",
+        "main.py"
+      ],
+      "cwd": "C:\\Users\\GT127774\\Downloads\\ZenseAi\\Ai_engineering_buddy\\ZenseaiMCP",
+      "env": {
+        "JWT_TOKEN": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0eXBlIjoiYWNjZXNzIiwic3ViIjoiYWRtaW5AemVuc2FyLmNvbSIsImlhdCI6MTc5MzU5Mjg1NiwiZXhwIjoxNzkzNjM2MDU2fQ.z5oruh7b5AxT_MGT7WW3CjJopLBXSsRIAq5YgKr2pkg",
+        "AIBUDDY_BASE_URL": "https://zenseai.zensar.com/middleware"
+      }
+    },
+
+    "zenseai-ingestion": {
+      "type": "stdio",
+      "command": "C:\\Users\\GT127774\\AppData\\Local\\Programs\\Python\\Python314\\Scripts\\uv.exe",
+      "args": [
+        "run",
+        "main.py"
+      ],
+      "cwd": "C:\\Users\\GT127774\\Downloads\\ZenseAi\\Ai_engineering_buddy\\ZenseaiIngestionMCP",
+      "env": {
+        "JWT_TOKEN": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0eXBlIjoiYWNjZXNzIiwic3ViIjoiYWRtaW5AemVuc2FyLmNvbSIsImlhdCI6MTc5MzU5Mjg1NiwiZXhwIjoxNzkzNjM2MDU2fQ.z5oruh7b5AxT_MGT7WW3CjJopLBXSsRIAq5YgKr2pkg",
+        "AIBUDDY_BASE_URL": "https://zenseai.zensar.com/middleware"
+      }
+    },
+
+
+    // llmlite server
+    "zenseaiMCP": {
+            "type": "http",
+            "url": "https://zenseai.zensar.com/testmcp/mcp",
+            "tools": [
+                "*"
+            ],
+            "headers": {
+                "x-litellm-api-key": "Bearer sk-3fvu1kSjfBE4oHXH-sTgQQ"
+            },
+            "env": {
+                "JWT_TOKEN": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0eXBlIjoiYWNjZXNzIiwic3ViIjoiYWRtaW5AemVuc2FyLmNvbSIsImlhdCI6MTc5MzY4MDEyNCwiZXhwIjoxNzkzNzIzMzI0fQ.KwSyBQHxZ6j3y16gf3v8r2cw9UWwTJVG-jb7aajExlk",
+                "AIBUDDY_BASE_URL": "https://zenseai.zensar.com/middleware"
+            }
+        }
+
+
+  }
+}
