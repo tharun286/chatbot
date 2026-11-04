@@ -1,0 +1,88 @@
+Here are the 20 tools from the zenseai-local MCP server, one by one:
+
+ask_workspace
+
+Lets you ask the workspace for information, guidance, or context-related answers.
+create_workspace_ticket
+
+Creates a new ticket or work item inside a workspace for tracking tasks/issues.
+delete_workspace_ticket
+
+Deletes an existing workspace ticket.
+get_dashboard_summary
+
+Fetches a summary/dashboard view of workspace or project status, metrics, or activity.
+get_project_model
+
+Retrieves the model/configuration associated with a specific project.
+get_project_workspaces
+
+Gets the list of workspaces linked to a project.
+get_user_info
+
+Returns details about the current user or account.
+get_workspace_agents
+
+Lists the agents that exist in or are assigned to a workspace.
+get_workspace_tickets
+
+Lists the tickets/issues associated with a workspace.
+list_my_workspaces
+
+Shows all workspaces the current user has access to.
+list_project_models
+Lists the models available for a project.
+list_project_prompt_templates
+Lists reusable prompt templates defined for a project.
+list_project_transactions
+Shows transaction records or activity logs for a project.
+list_projects
+Lists the projects available to the user.
+manage_workspace
+Creates, updates, configures, or manages workspace-level settings or state.
+run_agent
+Starts or runs an automated agent/workflow in a workspace/project context.
+search_zenseai
+Searches the ZenseAI system for relevant knowledge, records, or project data.
+update_project_model
+Updates the model configuration or metadata for a project.
+validate_project_workspace_access
+Checks whether the current user has valid access to a specific workspace/project.
+whoami
+Returns identity information about the authenticated user.
+get_user_info
+
+Returns the current authenticated user record from the ZenseAI system.
+list_projects
+
+Lists all projects the logged-in user can access.
+list_my_workspaces
+
+Lists every workspace the user can access, grouped by project.
+get_project_workspaces
+
+Fetches all workspaces inside a specific project that the user can access.
+validate_project_workspace_access
+
+Checks whether a given project and workspace are valid and accessible to the user.
+upload_knowledge_base_documents
+
+Uploads local documents (PDF, DOC, TXT, Excel, PPT, image, etc.) into a workspace’s knowledge base.
+delete_knowledge_base_documents
+
+Removes selected knowledge-base documents from a workspace by document name.
+create_workspace_codespace
+
+Creates a code space for a workspace from a local ZIP file of source code, usually for code ingestion/analysis.
+delete_workspace_codespace
+
+Deletes a specific code space inside a workspace by its name.
+get_workspace_tickets
+
+Lists the tickets associated with a specific workspace.
+create_workspace_ticket
+Creates a new ticket in a workspace from a local Excel/XLS file using a model and prompt settings.
+delete_workspace_ticket
+Deletes a specific ticket by ticket ID from a workspace.
+whoami
+Returns identity/context info about the current request and whether an API token is configured.
