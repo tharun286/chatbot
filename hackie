@@ -1,0 +1,1427 @@
+BFSI
+Banking, Insurance and Capital Markets · 62 use cases
+
+Banking
+30
+Insurance
+20
+Capital Markets
+12
+Banking
+15 themes · 30 use cases
+Stopping scam payments before they leave
+Scam warnings that fit the moment
+The problem to solve
+Generic warnings ('Are you sure?') are ignored, while blocking too many payments angers genuine customers. Build an AI model that scores each outgoing payment for scam risk using the payee, the customer's behaviour (for example, being on a long phone call while paying), device signals and known scam patterns, and shows a specific warning or pause that matches the likely type of scam.
+
+Stopping invoice-redirection fraud against businesses
+The problem to solve
+Criminals hack or imitate a supplier's email and send 'updated bank details', so that a business pays its genuine invoices into a criminal account. In one widely reported case, an employee of engineering firm Arup in Hong Kong sent about $25 million after a deepfake video call. Build an AI tool that flags payments to new or recently changed beneficiaries that do not match the supplier's history and prompts a call-back check.
+
+Digital identity you can trust
+Catching deepfakes and injected video in selfie checks
+The problem to solve
+Fraudsters can now fool selfie and video checks with synthetic faces, face-swap apps, masks or fake camera feeds, and these attacks are rising quickly. Build an AI defence that detects presentation attacks (photos, screens, masks) and injection attacks (virtual cameras, emulators), looks for signs of manipulation in the video and the device, and explains each risk score to the fraud team.
+
+Accepting the new digital identity wallets
+The problem to solve
+Governments are launching digital identity wallets that let people share verified details from their phone, but each scheme has different standards, data and trust levels. Build an AI-assisted onboarding service that accepts credentials from several digital ID schemes, checks they are valid, maps the data into the bank's systems and decides when extra checks are still needed.
+
+Early warning for business borrowers
+Warning signs in the borrower's own transactions
+The problem to solve
+A business's bank account shows stress long before its accounts do: falling sales receipts, late payments to suppliers or tax authorities, payroll cuts or growing reliance on the overdraft. Build an AI model that watches these patterns, scores each borrower's risk every week, explains what has changed and alerts the relationship manager with suggested actions.
+
+When a borrower's key customer or supplier fails
+The problem to solve
+A healthy borrower can be dragged down when a major customer goes bust or a key supplier stops delivering, but banks rarely map these links. Build an AI tool that builds a map of borrowers' main customers and suppliers from payment flows and public data, watches for trouble among them and alerts the bank to borrowers who are exposed.
+
+Fake applicants and fake documents
+Spotting synthetic identities
+The problem to solve
+Synthetic identities are built up slowly over months, with small credit lines repaid on time, before the fraudster borrows heavily and disappears. Build an AI model that links applications, devices, addresses, phone numbers and credit histories to spot identities that look 'too new' or share hidden connections, and explains why an application is suspicious.
+
+Catching edited and AI-generated documents
+The problem to solve
+Fake or edited payslips and bank statements can look perfect to the human eye. Build an AI tool that checks document files for signs of editing (font changes, file metadata, pixel-level anomalies), tests the figures for internal consistency, checks that employers and banks exist, and cross-checks with open-banking data where available.
+
+Complaints handled right
+Catching complaints wherever they are made
+The problem to solve
+Rules in many countries treat any expression of dissatisfaction as a complaint, but agents often miss them or deal with them informally. Build an AI model that spots complaints in calls, chats, emails and social media, classifies them, checks they have been logged correctly and starts the right process and deadlines.
+
+Fixing root causes and paying redress consistently
+The problem to solve
+Similar complaints are often decided differently by different handlers, and the underlying causes are rarely fixed. Build an AI tool that groups complaints by real root cause, links them to the process or system at fault, recommends consistent outcomes and compensation based on past decisions and ombudsman rulings, and tracks whether fixes reduce new complaints.
+
+Credit papers in hours, not weeks
+Drafting the credit memo
+The problem to solve
+Analysts gather financial statements, management accounts, industry reports, news and internal data, then write long credit memos largely by hand. Build an AI agent that collects this information, drafts the memo in the bank's standard format with every figure linked to its source, highlights the key risks and mitigations, and lets the analyst edit and challenge it.
+
+Annual reviews that refresh themselves
+The problem to solve
+Every existing loan must be reviewed at least once a year, and most reviews involve collecting and rewriting the same information again. Build an AI tool that updates the previous review with new financials, account behaviour, covenant results and news, shows clearly what has changed and why it matters, and recommends whether a full review is needed.
+
+An app assistant that gets things done
+Doing tasks, not just answering questions
+The problem to solve
+Customers want to say 'pay my rent on the 1st of every month' or 'freeze my card and send a new one' and have it done. Build an AI agent inside the app that understands the request, prepares the action, shows a clear summary for the customer to confirm, applies the right security checks and keeps a full record of what it did and why.
+
+Answering 'why' questions about my money
+The problem to solve
+Customers often ask questions such as 'why is my balance lower than I expected?' or 'why was I charged this?', which normally need a call-centre agent to piece together. Build an AI assistant that looks at the customer's own transactions, pending payments, fees and holds, and gives a short, accurate explanation with links to the items involved.
+
+Help for agents during live calls
+Real-time guidance on the call
+The problem to solve
+Agents put customers on hold to look up procedures, and different agents give different answers to the same question. Build an AI assistant that listens to the call (with consent), understands what the customer needs, brings up the right procedure and customer details, suggests next steps and reminds the agent of required disclosures at the right moment.
+
+Notes and follow-ups that write themselves
+The problem to solve
+After each call, agents spend several minutes summarising the conversation and creating follow-up tasks, and notes are often incomplete. Build an AI tool that drafts an accurate call summary, records what was agreed, creates the follow-up tasks in the right systems and lets the agent check and confirm everything in seconds.
+
+Keeping critical services running
+Spotting risky changes before they go live
+The problem to solve
+Large banks make thousands of technology changes every month, and a small number cause major outages, yet approvers have little time to judge risk. Build an AI model that learns from past changes and incidents, scores the risk of each new change, explains why (for example, it touches a payment system on payday) and suggests safer timing or extra testing.
+
+An incident commander's assistant
+The problem to solve
+During an outage, engineers sift through alerts, logs and chat messages while managers keep asking which customers are affected and what to tell them. Build an AI agent that pulls together the timeline, links symptoms to recent changes, suggests likely causes, estimates how many customers and payments are affected, and drafts updates for customers and internal teams.
+
+Stopping fraudsters who phone the bank
+Detecting social-engineering calls
+The problem to solve
+Fraudsters follow scripts, call repeatedly to probe defences and use pressure tactics, but each agent sees only one call. Build an AI model that analyses call content, behaviour and patterns across many calls (for example, the same voice or phone number used on several accounts) and warns the agent in real time when a call looks like an account-takeover attempt.
+
+Knowing it's the customer without 20 questions
+The problem to solve
+Genuine customers spend minutes answering security questions, which annoys them and costs agent time. Build an AI system that quietly verifies callers using signals such as the device and number used, voice, behaviour and recent app activity, with strong protection against spoofing, and asks extra questions only when the risk is high.
+
+Disputes and chargebacks
+Getting the dispute right the first time
+The problem to solve
+Customers raise disputes through the app or by phone, often unsure what went wrong, and staff must choose the right scheme reason code and collect the evidence. Build an AI agent that talks with the customer, works out what happened, checks whether it can be fixed without a dispute (for example, a refund that is already on its way), selects the right reason and gathers the evidence needed.
+
+Fighting 'friendly fraud' with evidence
+The problem to solve
+Some cardholders claim they did not make purchases they actually made. Newer scheme rules (for example, Visa's Compelling Evidence 3.0) let merchants show proof such as matching devices and addresses from past undisputed orders, but gathering it is manual. Build an AI tool that assembles this evidence automatically and predicts which disputes are worth fighting.
+
+Guarding the bank's own payment systems
+Spotting fraudulent messages from inside the bank
+The problem to solve
+When criminals take over an operator's login or terminal, the payment messages they send look technically valid. Build an AI model that learns normal patterns for each operator, beneficiary and payment route, and flags unusual payment messages (new beneficiaries, odd timing, unusual amounts or sequences) for urgent checking before they are released.
+
+Checking that only authorised payments went out
+The problem to solve
+Banks reconcile payments at the end of the day, but attackers can hide fraudulent messages by deleting records or altering reports, as happened in the Bangladesh case. Build an AI tool that independently compares the messages actually sent with authorised instructions and network confirmations in near real time, and raises an alert on any mismatch.
+
+Borrowers in financial difficulty
+Choosing the right kind of help
+The problem to solve
+Lenders can offer payment holidays, reduced payments, longer terms or a switch to interest-only, but the choice is often made quickly without knowing which option will really help. Build an AI tool that uses the customer's circumstances and the outcomes of similar past cases to recommend the support most likely to help them recover, and explains the trade-offs in plain language.
+
+Collections with dignity
+The problem to solve
+Standard collections send the same letters and calls to everyone, which can feel aggressive and lead customers to ignore all contact. Build an AI system that chooses the tone, timing and channel of contact for each customer, offers self-service options to agree a plan without speaking to anyone, and checks every message for fairness and required wording.
+
+Adviser meetings that matter
+Meeting prep in minutes
+The problem to solve
+Before a meeting, advisers pull together portfolio performance, recent transactions, life events, open actions and relevant market news from many systems. Build an AI agent that prepares a one-page briefing for each meeting, with suggested discussion points and questions tailored to the client's goals.
+
+From advice to suitability report
+The problem to solve
+When advice is given, advisers must write a detailed suitability report explaining why each recommendation fits the client's goals, attitude to risk and circumstances, which can take hours per client. Build an AI tool that drafts the report from the client's fact-find, risk profile, holdings, agreed meeting notes and the adviser's recommendation, checks that every required element is covered and flags reasoning that does not hold up.
+
+Charging customers correctly
+Matching the small print to the system
+The problem to solve
+Product terms, price lists and rate-change notices say one thing, but the parameters set up in the core system may say another (for example, a fee waiver that was never switched on). Build an AI agent that reads the customer documents, compares them with the system configuration and the real charges on sample accounts, and lists every mismatch with evidence for a product owner to fix.
+
+Putting it right at scale
+The problem to solve
+When a charging error is found, the bank must work out who was affected, recalculate years of interest and fees, add compensation and trace customers who have moved or closed their accounts. This is usually done by large teams with spreadsheets. Build an AI-assisted remediation engine that identifies affected accounts, recalculates the correct amounts, explains each calculation and finds current contact details for former customers.
+
+Insurance
+7 themes · 20 use cases
+Smarter claims handling
+Fast-track for small, simple claims
+The problem to solve
+Thousands of small claims (for example, food spoiled in a power cut or a cracked windscreen) are handled by people one at a time and take days. Build a team of AI agents that checks the customer is covered, confirms the event really happened (for example, from weather or power-outage records), looks for warning signs, works out the amount to pay and hands a ready-to-approve recommendation to a staff member.
+
+Reporting a claim, made easy
+The problem to solve
+When something goes wrong, customers have to call, wait and answer many questions, and information often arrives incomplete, leading to back-and-forth. Build an AI agent that lets customers report a claim by chat, phone or email, reads their photos and documents, checks their policy is active, captures everything needed the first time and sends it to the right team.
+
+Check before we pay
+The problem to solve
+Insurers sometimes pay too much (duplicate payments, amounts above the policy limit, or forgetting the part the customer should pay themselves) or pay claims that look suspicious. Build an AI agent that reviews each claim before payment, flags anything wrong or suspicious, explains why and passes it to a person to decide.
+
+Faster, better risk decisions
+Sorting incoming requests for quotes
+The problem to solve
+Brokers send requests for quotes as emails with many attachments in different formats. Staff read each one to understand it, spot what is missing and decide whether the insurer even wants this kind of business. Build an AI agent that reads these packs, pulls out the key facts, flags gaps, checks the fit with what the insurer wants to cover and ranks the queue so the best opportunities are handled first.
+
+Risk research assistant
+The problem to solve
+To judge a risk, staff search many sources by hand: the location, flood or wildfire exposure, the company's background, sanctions lists. Build an AI agent that gathers this from public sources and writes a short risk summary with references, highlighting any concerns.
+
+Medical-file summary for life insurance
+The problem to solve
+For life and health cover, staff read long medical reports and application forms to decide whether to accept someone and on what terms. Build an AI agent that summarises the medical evidence, compares it with the insurer's rules and suggests a decision with clear reasons for a specialist to confirm.
+
+Selling to and serving customers
+Policy changes done instantly
+The problem to solve
+Customers often need to change their policy during the year, for example to add a driver, change a car or move house. Build an AI agent that understands the request in plain language, checks it is allowed, works out any change in price, gets the customer's agreement and updates the policy.
+
+Sales assistant for advisors
+The problem to solve
+Advisors and brokers spend a lot of time comparing a customer's current cover with the products available and preparing proposals. Build an AI agent that spots gaps in a customer's cover, suggests suitable products and drafts a clear proposal.
+
+Keeping customers when policies renew
+The problem to solve
+Most policies renew every year, and customers who are unhappy or find a cheaper price quietly leave. Build an AI agent that spots customers likely to leave, explains why and prepares a personalised offer or message for a staff member to approve.
+
+Running the insurer better: operations, regulation and old systems
+Understanding old systems before replacing them
+The problem to solve
+Insurers' core systems are often written in old programming languages, and the business rules (for example, how prices or payments are calculated) are buried in the code with little documentation. Build an AI agent that reads old code, explains the business rules in plain language and creates tests to check that a new system behaves the same way.
+
+Staying on top of new rules
+The problem to solve
+Insurers must follow many regulations that change often, including new rules on how AI may be used. Build an AI agent that tracks regulatory updates, explains what changed, identifies which products, processes or AI tools are affected and drafts an action list for the compliance team to approve.
+
+Matching the money with partners
+The problem to solve
+Insurers work with partner firms that sell policies and handle claims on their behalf. These partners send monthly spreadsheets in many different formats, which staff clean, combine and check against the insurer's own accounts by hand. Build an AI agent that reads these files, puts them into one standard format, matches the figures and explains any differences.
+
+P&C
+Fighting costly lawsuits in injury claims
+Spotting lawsuit risk in the first hours
+The problem to solve
+The signs that a claim may turn into a lawsuit, such as a lawyer's letter, a delay in treatment or a referral to a particular clinic, usually appear early but are missed among hundreds of open claims. Build a team of AI agents that reads each new injury claim as soon as it is reported, scores the chance of a lawyer or lawsuit, explains the reasons and recommends the next step, such as an early call to the injured person or a fair early offer, for the adjuster to approve.
+
+Never missing a legal deadline
+The problem to solve
+Lawyers often send letters demanding payment within a fixed time, sometimes at or near the policy limit. These letters arrive by post, email or as attachments and can sit unread, or their deadline can be misread. Build an AI agent that reads all incoming legal letters, picks out demands and deadlines, checks them against the policy, sets reminders and drafts a response for the adjuster and legal team to approve.
+
+Checking medical bills and referral patterns
+The problem to solve
+In some injury claims, treatment is increased to raise the value of the claim, and claimants are sent to particular clinics by their lawyers. Spotting this needs someone to read every bill and compare it across many claims, which rarely happens. Build an AI agent that reviews medical bills and records, compares the treatment with what is usual for the injury, spots links between law firms, clinics and claimants across many claims, and flags concerns, with reasons, for the claims or fraud team to review.
+
+P&C
+Getting back money that others should pay
+Finding who else should pay
+The problem to solve
+The signs that someone else caused a loss are often buried in claim notes, photos, police or fire reports and repair estimates. Adjusters may not notice them, or notice them too late. Build an AI agent that reviews every open and recently paid claim, spots who else could be responsible, estimates how much could be recovered and how likely it is to succeed, and sends the best opportunities to the recovery team.
+
+Building and chasing the recovery case
+The problem to solve
+Once an opportunity is found, staff must gather evidence, work out the amount, write to the responsible party or their insurer and follow up, often before a legal time limit runs out. For complex losses such as a battery fire, several parties may share the blame. Build a team of AI agents that collects the evidence, works out who owes what, drafts the demand letters or claim forms, tracks time limits and replies, and keeps staff updated on each case.
+
+Claiming what reinsurers owe
+The problem to solve
+Insurers pass part of their large or catastrophe claims to reinsurers. Working out what each reinsurer owes means applying complex contract terms to every claim, and claims that qualify can be missed or reported late, especially after a large storm. Build an AI agent that reads the reinsurance contracts, checks each claim against them, works out the amount owed, prepares the claim to the reinsurer and tracks payment.
+
+P&C
+Seeing hidden long-term liabilities before they become losses
+Early warning for emerging risks
+The problem to solve
+Early clues to a new liability appear in small ways: a few similar claims, a new scientific study, a regulator's action, a first lawsuit. No single person sees them all. Build a team of AI agents that continuously scans the insurer's own claims and policy data, along with outside sources such as research, regulator actions, news and court filings, links the signals together and raises explained warnings for actuaries and underwriters to accept or reject.
+
+Measuring how exposed the business is
+The problem to solve
+When a new risk is flagged, the insurer needs to know which customers, policies and years could be affected, whether the policy wording covers it and how much reinsurance would respond. Today this means weeks of manual searching through old policies and claims. Build an AI agent that finds the affected customers and policies, reads the wording to see whether the risk is covered or excluded, estimates the possible cost and suggests actions, such as new exclusions, price changes or extra reinsurance, for leaders to decide.
+
+Capital Markets
+6 themes · 12 use cases
+Protecting deal secrets and market surveillance
+Guarding deal secrets across the wall
+The problem to solve
+When bankers start work on a merger or a bond issue, the names go on a watch or restricted list, and bankers sometimes 'wall-cross' investors to sound them out. Checking that nobody on the trading side touched those names, or the deal's likely targets and peers, is mostly manual. Build an agent network that reads deal-team mandates, keeps the watch and restricted lists up to date, looks for trading, research or chat activity in related names, and drafts an evidence pack for Compliance, with every finding linked to its source record and access limited by role so deal details never reach the wrong team.
+
+Triage of surveillance alerts that explains itself
+The problem to solve
+Surveillance systems flag possible spoofing, layering, front-running or marking-the-close, but over 90% of alerts are false and each takes an analyst hours to clear. Build an AI investigator that pulls the order book, the trader's history, related chats and calls, and market news around the event, decides whether it is likely genuine, writes a plain-language case note and recommends close, escalate or monitor. It learns from past closed cases and the market-abuse rules to keep decisions consistent, and an analyst signs off every closure.
+
+Settlement and post-trade operations
+Predicting and preventing settlement fails
+The problem to solve
+Trades fail because of wrong settlement instructions, missing securities, late funding, mismatched details or a counterparty that is slow to confirm. Teams usually find out on the morning of settlement, which is too late. Build an agent network that scores every open trade for fail risk using counterparty history, security availability, instruction status and cut-off times, and recommends a fix such as chasing an instruction, borrowing the stock, using partial settlement or re-routing.
+
+Breaks and confirmations that resolve themselves
+The problem to solve
+Confirmations and counterparty statements arrive as PDFs, emails and SWIFT messages in different layouts, and each mismatch (price, quantity, date, account) is solved by hand. Build an AI agent that reads incoming confirmations, matches them to the firm's own record, finds the cause of each break, drafts the message to the counterparty and, where rules allow, corrects the booking after approval.
+
+Liquidity, cash and collateral
+Intraday liquidity and cash-positioning agent
+The problem to solve
+Treasury must predict how much cash will leave and arrive across accounts, currencies and payment systems during the day, and decide when to move funds, borrow or sell assets. Build an agent network that combines payment queues, nostro balances, expected settlements and market-hours data, predicts the cash position by hour, warns before a shortfall and suggests the cheapest way to cover it.
+
+Turning legal agreements into live rules
+The problem to solve
+Terms in ISDA master agreements and Credit Support Annexes (thresholds, eligible collateral, haircuts, notice times) are in long PDFs, and teams re-key them into systems by hand. Build an AI agent that reads each agreement, extracts the key terms with page references, compares them to what is set up in the collateral system, flags mismatches and drafts the correction request, with every extracted term linked to its clause so legal can check it in seconds.
+
+Trade capture and regulatory reporting
+A trading assistant that checks as it captures
+The problem to solve
+Sales traders and dealers type or say trade details into the order and trade management system, and a slip in quantity, currency or counterparty may not be caught until much later. Build an AI assistant that takes a request in plain words or from a chat, fills in the trade ticket, checks it against client limits, mandate and best-execution rules, and shows a clear summary for the trader to confirm before booking.
+
+Fixing regulatory trade reports before they bounce
+The problem to solve
+Trade reports for EMIR Refit, MiFIR, SFTR and similar regimes are rejected by trade repositories for missing or wrong data, such as legal entity IDs, product codes or timestamps, and fixing them is manual. Build an AI agent network that checks each report against the rules before submission, explains why rejected reports failed, traces the error back to its source system and suggests the fix with evidence.
+
+Market data, valuations and P&L
+Catching bad market data before it hits valuations
+The problem to solve
+Stale curves, bad ticks and missing volatility points quietly corrupt end-of-day P&L and risk. Build an agent network that watches every price feed, flags anomalies, tests them against related instruments and proposes a repair, such as an interpolated value or a fallback source, before the end-of-day cut-off.
+
+Explaining the day's P&L in minutes
+The problem to solve
+Every morning, desks need to know why P&L moved and how much is unexplained. Build an agent that calls the risk engine, splits the move into rates, FX, volatility, carry, new trades and cancellations, and chases any leftover amount to a likely cause such as a missing trade, a late price or a wrong rate.
+
+Execution quality and market resilience
+Picking the right execution algo for each order
+The problem to solve
+Traders choose algos (VWAP, TWAP, implementation shortfall, dark-pool-first) by habit. Build an agent network that reads the order's size, liquidity, volatility and urgency, predicts the cost of each strategy and recommends one. A second agent scores the result against the benchmark and feeds the outcome back so the choice improves over time.
+
+A simulated market to stress-test trading controls
+The problem to solve
+Risk limits, kill switches and trading controls are tested on a few past events. Build a simulated market where AI agents behave as different participants (market makers, funds, panicked sellers), replay a flash crash or a liquidity freeze, and show where the firm's controls fail or react too slowly.
+
+HTM
+HTM
+Hi-Tech, ISVs & SaaS, Media, Gaming, Mining, Supply Chain and Utilities · 160 use cases
+
+Hi-Tech
+40
+ISVs & SaaS
+20
+Media & Entertainment
+20
+Gaming
+20
+Mining
+20
+Supply Chain Management
+20
+Utilities
+20
+Hi-Tech
+17 themes · 40 use cases
+OEM
+Engineering Change & PLM Velocity
+ECO Impact Analysis & Change Orchestration
+The problem to solve
+Engineering change orders take weeks to assess because impact on BOM where-used, open POs, WIP, inventory, firmware and service parts is analysed manually across PLM and ERP.
+
+Part Master Harmonisation & BOM Data Quality Agent
+The problem to solve
+Post-M&A and multi-ERP OEMs carry duplicate, misclassified and incomplete part masters, breaking spend visibility, reuse and compliance roll-ups.
+
+OEM
+Component Availability & Supply Resilience
+Component Obsolescence (EOL/PCN) Response Agent
+The problem to solve
+Hundreds of supplier PCN/EOL notices per year arrive by email/portal; mapping them to affected products, finding alternates and deciding last-time-buy quantities is manual and error-prone.
+
+Constrained-Component Allocation & Shortage Response Agent
+The problem to solve
+When critical components are on allocation, planners manually decide which orders and SKUs get supply, often without margin or customer-priority context.
+
+Sub-Tier Semiconductor Content Risk & Where-Used Agent
+The problem to solve
+OEMs lack visibility of sub-tier dependencies (fab, substrate, packaging site) behind their components, so geopolitical or disaster events cannot be translated into SKU-level risk.
+
+OEM
+NPI & Hardware-Software Integration
+NPI Gate Readiness & Launch Risk Agent
+The problem to solve
+NPI gate reviews depend on manually compiled evidence across DFx, supplier PPAP, test coverage, compliance and service readiness; risks surface late.
+
+Hardware-Firmware Compatibility & Release Matrix Agent
+The problem to solve
+OEMs manage combinations of hardware revisions, firmware, BIOS, drivers and OS support; compatibility matrices are maintained by hand and break at every release.
+
+OEM
+Product Quality, Reliability & Warranty
+Warranty Claim Adjudication & Leakage Prevention Agent
+The problem to solve
+Warranty claims from partners and service providers are validated manually against entitlement, failure codes and parts returned; fraud and invalid claims leak margin.
+
+Early Field-Failure Signal Detection & 8D Orchestration
+The problem to solve
+Emerging field issues are spread across support tickets, RMAs, telemetry and social posts; quality teams detect them weeks late and run 8D containment manually.
+
+Supplier Quality Recovery & SCAR Agent
+The problem to solve
+When failures trace to supplier components, building the evidence package, issuing SCARs and recovering costs is slow; most recoverable cost is never claimed.
+
+OEM
+Field Service & Installed-Base Intelligence
+Predictive Service Dispatch & Parts Pre-positioning Agent
+The problem to solve
+Enterprise hardware failures are handled reactively; parts are not at the right depot and engineers are dispatched without diagnosis, missing SLAs.
+
+Connected-Device Remote Diagnostics & Self-Healing Agent
+The problem to solve
+Support engineers manually pull logs and run diagnostics on connected devices; known fixes (config, firmware, resets) take hours to apply.
+
+Installed-Base Renewal & EOSL Upgrade Agent
+The problem to solve
+Service contract renewals and end-of-service-life upgrades are missed because installed-base data is fragmented and sales teams lack context.
+
+OEM
+Outsourced Manufacturing Orchestration
+EMS/ODM Build Quality & Yield-Escape Agent
+The problem to solve
+OEMs receive partner MES/test data late and in inconsistent formats; first-pass yield drops and test escapes at contract manufacturers are discovered after shipment.
+
+OEM
+Technical Content & Support Engineering
+Configure-to-Order Validation & Technical Quote Agent
+The problem to solve
+Complex hardware configurations (servers, network systems) are quoted with invalid or sub-optimal configurations, causing order holds, re-quotes and margin leakage.
+
+Change-Driven Service Documentation Agent
+The problem to solve
+Service manuals, install guides and parts catalogues lag ECOs by weeks; field technicians work from outdated content.
+
+Tier-2/3 Escalation Resolution Agent for Enterprise Hardware
+The problem to solve
+Complex escalations need senior engineers to correlate logs, known defects and configurations; resolution takes days and depends on tribal knowledge.
+
+OEM
+Product Compliance & Cyber Regulation
+EU Cyber Resilience Act SBOM & Vulnerability Reporting Agent
+The problem to solve
+From 11-Sep-2026 OEMs selling into the EU must report actively exploited vulnerabilities within 24/72 hours; SBOMs, vulnerability triage and ENISA reporting are not operationalised.
+
+Product Environmental Compliance Declaration Agent (RoHS/REACH/PFAS)
+The problem to solve
+Collecting supplier material declarations, chasing gaps and rolling up substance compliance per product is manual; new PFAS restrictions expand scope.
+
+Export Control Classification & License Determination Agent
+The problem to solve
+Classifying hi-tech products and technology (ECCN, encryption, UK strategic export lists) and determining licence needs per destination is slow and expert-dependent.
+
+Semiconductors
+Design & Verification Productivity
+Verification Coverage Closure Agent
+The problem to solve
+Coverage closure on complex SoCs requires engineers to analyse coverage holes, write new constrained-random tests and rerun regressions over many weeks.
+
+Regression Failure Triage & Debug Agent
+The problem to solve
+Nightly regressions produce thousands of failures; engineers spend hours clustering duplicates, bisecting commits and routing bugs.
+
+Spec-to-Assertion (SVA) & Formal Property Agent
+The problem to solve
+Translating architecture specs into SystemVerilog assertions and formal properties is manual, inconsistent and often skipped for schedule reasons.
+
+Post-Silicon Validation & Bring-Up Orchestration Agent
+The problem to solve
+Post-silicon bring-up coordinates lab benches, firmware, test content and debug across teams; failures are triaged manually and lab time is scarce.
+
+Semiconductors
+EDA Workflow & Compute Economics
+EDA Licence & Compute Job Orchestration Agent
+The problem to solve
+Expensive EDA licences sit idle while jobs queue; compute farms and cloud burst are scheduled by static policies, not tape-out priorities.
+
+Tape-Out Readiness & Sign-off Checklist Agent
+The problem to solve
+Tape-out sign-off requires collating results from dozens of checks (STA, DRC/LVS, power, IR, reliability, verification metrics) across teams; status is tracked in spreadsheets.
+
+Semiconductors
+Fab Utilities & Sustainability
+Fab Utilities Energy, Water & Abatement Optimisation Agent
+The problem to solve
+Fab facilities (chillers, UPW, exhaust, abatement) are tuned by fixed setpoints; energy, water and gas-abatement performance is optimised manually and inconsistently across shifts.
+
+Semiconductors
+Fab Operations & Excursion Control
+Fab Excursion Response & Lot Disposition Agent
+The problem to solve
+When SPC charts go out-of-control, engineers manually trace affected lots, tools and recipes, decide holds and dispositions, often hours later.
+
+Fab Shift Passdown & Handover Intelligence Agent
+The problem to solve
+Shift handovers rely on free-text logs and verbal briefings; open issues, tool states and in-flight experiments get lost between shifts.
+
+Incoming Materials CoA Anomaly & Supplier Excursion Agent
+The problem to solve
+Chemical, gas and wafer suppliers send certificates of analysis that are checked against specs but rarely trended; subtle supplier drift causes yield excursions.
+
+Semiconductors
+Yield & Defect Intelligence
+Yield Learning Co-Pilot (Wafer-Map Pattern to Root Cause)
+The problem to solve
+Yield engineers manually classify wafer-map signatures and correlate them with process history across hundreds of steps.
+
+Defect Review Classification & Sampling Optimisation Agent
+The problem to solve
+SEM defect review images are classified partly manually; sampling plans are static and miss emerging defect types.
+
+Semiconductors
+Equipment Health & Maintenance
+Predictive Maintenance & Chamber-Matching Agent
+The problem to solve
+Tool failures and chamber drift are detected late from FDC data; maintenance is calendar-based and chamber mismatch causes yield variation.
+
+Equipment Troubleshooting Guide Agent for Technicians
+The problem to solve
+When tools go down, technicians search manuals, past tickets and ask senior engineers; mean time to repair depends on who is on shift.
+
+Semiconductors
+Advanced Packaging & Test
+Chiplet / 2.5D Package Thermal-Warpage Co-Design Agent
+The problem to solve
+Thermal and warpage issues in chiplet packages are found late via slow simulations; design, package and system teams iterate manually.
+
+Final Test Program Optimisation & Test-Time Reduction Agent
+The problem to solve
+ATE test programs accumulate redundant tests; test time and guard-bands are tuned manually per product.
+
+Semiconductors
+Semiconductor Commercial & Supply Operations
+Customer RMA & Failure Analysis Orchestration Agent
+The problem to solve
+Customer returns for chips require coordinated electrical and physical FA across labs; status and 8D reports are slow and manual.
+
+Design-Win to Wafer-Start Demand Sensing Agent
+The problem to solve
+Semiconductor demand forecasts mix distributor POS, design-win pipeline and customer forecasts manually; wafer starts commit months ahead.
+
+Workload-to-Silicon Selection & Design-Win Engineering Agent
+The problem to solve
+Customers and FAEs struggle to map workloads (AI inference, edge, networking) to the right SKUs, configurations and benchmarks; design-win cycles are long.
+
+Semiconductors
+Engineering Knowledge & Workforce
+Fab Process Knowledge Capture & Technician Onboarding Agent
+The problem to solve
+Process knowledge sits in senior engineers' heads, OCAPs and old reports; new technicians take months to become productive.
+
+ISVs & SaaS
+7 themes · 20 use cases
+AI-Native Software Engineering
+Spec-Driven Development Agent Pipeline
+The problem to solve
+Feature delivery is slowed by ambiguous requirements, hand-offs and rework; AI code assistants speed typing but not the end-to-end spec-to-release flow.
+
+Integration Connector Factory Agent
+The problem to solve
+ISVs need dozens of integrations (ERP, CRM, HRIS) for marketplaces; each connector is hand-built and maintained.
+
+Engineering Delivery Intelligence & Bottleneck Agent
+The problem to solve
+Engineering leaders lack timely insight into delivery risk, bottlenecks and AI-tool impact across teams; status reports are manual.
+
+Product & Platform Modernisation
+Legacy Codebase Comprehension & Modernisation Planning Agent
+The problem to solve
+ISVs cannot modernise what they do not understand: legacy modules lack documentation, ownership and test coverage.
+
+Framework & Runtime Upgrade Migration Agent
+The problem to solve
+Upgrading frameworks and runtimes (Java 8->21, .NET Framework->.NET 8, Angular, Python 2->3) across large codebases is tedious and repeatedly deferred.
+
+Quality Engineering & Release Confidence
+Autonomous Test Generation & Self-Healing Test Agent
+The problem to solve
+UI/API test suites break with every release and coverage lags new features; QA teams spend most effort on maintenance.
+
+Release Readiness & Change-Risk Go/No-Go Agent
+The problem to solve
+Release decisions rely on meetings and dashboards; change risk (blast radius, test gaps, incident history) is not assessed consistently.
+
+Security, Compliance & Trust
+Vulnerability Remediation Agent (SCA/SAST to Merged Fix)
+The problem to solve
+Security scanners generate large backlogs of findings; developers triage and fix slowly, breaching remediation SLAs.
+
+SOC 2 / ISO 27001 Continuous Compliance Evidence Agent
+The problem to solve
+SaaS companies spend weeks each audit cycle collecting screenshots and evidence across cloud, HR and engineering systems.
+
+AI Feature Evaluation & Guardrail Assurance Agent
+The problem to solve
+ISVs shipping GenAI/agent features lack systematic evaluation for hallucination, bias, prompt injection and regression across model updates.
+
+Cloud Operations, SRE & FinOps
+Incident Response, RCA & Auto-Remediation Agent
+The problem to solve
+On-call engineers correlate alerts, logs and deployments manually; MTTR is high and RCAs are inconsistent.
+
+Cloud FinOps Optimisation Agent with Safe Actions
+The problem to solve
+Cloud cost recommendations pile up unactioned because engineers lack context and fear performance impact.
+
+LLM Token & Inference Cost Optimisation Agent
+The problem to solve
+AI-native SaaS products see inference costs grow faster than revenue; model choice, caching and prompt size are not optimised per feature.
+
+Customer Lifecycle: Onboarding, Success & Support
+Enterprise SaaS Onboarding & Configuration Agent
+The problem to solve
+Enterprise customers wait weeks for implementation: requirements are translated into tenant configuration, workflows and integrations by scarce consultants.
+
+Customer Health & Churn-Prevention Orchestration Agent
+The problem to solve
+Customer success managers react to churn signals late; health scores are static and playbooks are executed inconsistently.
+
+Technical Support Resolution Agent with Sandbox Reproduction
+The problem to solve
+Tier-2 SaaS support spends hours reproducing customer issues and searching past cases; escalations to engineering are frequent.
+
+Customer Data Migration Agent for SaaS Onboarding
+The problem to solve
+Migrating customer data from legacy systems into SaaS schemas requires manual field mapping, transformation and reconciliation.
+
+Product & Revenue Intelligence
+Product-Led Growth Expansion Signal & Upsell Agent
+The problem to solve
+Usage signals of expansion readiness (seat limits, feature gates, new teams) are not acted upon; sales and product teams miss upgrade moments.
+
+Voice-of-Customer to Roadmap Agent
+The problem to solve
+Feedback from tickets, calls, community and sales notes is scattered; product managers cannot quantify demand or link it to revenue.
+
+Entitlement, Usage & Billing Revenue-Leakage Agent
+The problem to solve
+Usage-based and hybrid pricing produce mismatches between contracts, entitlements, usage and invoices; overages go unbilled and credits are misapplied.
+
+Media & Entertainment
+8 themes · 20 use cases
+Content Production Efficiency
+Script Breakdown & Production Scheduling Agent
+The problem to solve
+Line producers manually break down scripts into elements (cast, locations, props, VFX) and build schedules and budgets; every rewrite forces rework.
+
+Sports Highlights Auto-Production & Distribution Agent
+The problem to solve
+Producing and distributing highlights across social, app and broadcast within minutes of key moments is labour-intensive.
+
+Media Asset & Archive Monetisation
+Footage Logging & Metadata Enrichment Agent
+The problem to solve
+Dailies, rushes and archive footage are logged manually; metadata is sparse, so editors and sales teams cannot find usable content.
+
+Archive Monetisation & Clip Licensing Agent
+The problem to solve
+Licensing requests for archive clips require finding footage, checking rights and talent clearances, pricing and delivering - often taking days.
+
+Localisation, Versioning & Compliance
+Localisation Orchestration Agent (Subtitles, Dubbing, QC)
+The problem to solve
+Localising a title into many languages involves vendor routing, script adaptation, timing, dubbing and QC across fragmented tools; delays push back launches.
+
+Territorial Compliance Edit & Age-Rating Agent
+The problem to solve
+Titles need territory-specific edits and ratings (violence, language, product placement, regulatory codes); compliance review is manual and slow.
+
+Rights, Royalties & Residuals
+Rights Availability & Windowing Agent
+The problem to solve
+Answering 'can we exploit title X on platform Y in territory Z from date D?' requires reading complex contracts and rights systems; errors cause breaches or lost revenue.
+
+Royalty Statement Reconciliation & Claims Agent
+The problem to solve
+Publishers and rights holders receive massive DSP and CMO royalty statements; matching usage to works, identifying unclaimed or underpaid royalties is manual.
+
+Music Cue Sheet Generation & Registration Agent
+The problem to solve
+Cue sheets listing music used in programmes are compiled manually from edit decision lists, often late or inaccurate, causing royalty leakage.
+
+Talent Residuals Calculation & Payment Agent
+The problem to solve
+Guild residuals (e.g., SAG-AFTRA, WGA, DGA) depend on complex formulas across platforms and reuse; calculations are manual and error-prone.
+
+Audience, Programming & Subscriber Growth
+Commissioning & Greenlight Evidence Agent
+The problem to solve
+Commissioning teams make greenlight decisions with partial evidence on audience demand, comparable titles and cost-to-value.
+
+FAST Channel Programming & Scheduling Agent
+The problem to solve
+FAST channels require continuous schedule creation from libraries, respecting rights windows, ad break structure and audience patterns; done manually per channel.
+
+Streaming Subscriber Churn & Win-Back Agent
+The problem to solve
+Streaming services see high churn after tentpole releases; retention offers and content recommendations are generic.
+
+Advertising Revenue Operations
+CTV Ad Yield & Campaign Pacing Agent
+The problem to solve
+Ad ops teams manually adjust pricing floors, inventory allocation and pacing across direct and programmatic demand.
+
+Ad Sales Proposal & Audience Package Agent
+The problem to solve
+Sales teams build proposals from RFPs by manually assembling audience segments, inventory availability, pricing and case studies.
+
+Ad Order-to-Cash Discrepancy & Makegood Agent
+The problem to solve
+Discrepancies between booked, delivered and billed impressions require manual reconciliation across ad servers, verification vendors and billing.
+
+Media Supply Chain & Distribution Operations
+Content Delivery Package & Platform Spec Compliance Agent
+The problem to solve
+Delivering titles to streaming and broadcast partners requires packaging (IMF, metadata, artwork, captions) to each platform's spec; rejections cause rework and delays.
+
+Playout & Streaming QoE Incident Agent
+The problem to solve
+Broadcast playout and OTT streaming incidents (encoder failures, CDN issues, ad insertion errors) are detected via many monitors; triage is manual during live events.
+
+Content Protection & Trust
+Piracy Detection & Takedown Agent
+The problem to solve
+Pirated streams and uploads appear across sites, social and IPTV; detection and takedown notices are slow relative to live events.
+
+Newsroom Synthetic Media Verification & Provenance Agent
+The problem to solve
+Newsrooms face a flood of user-generated and possibly synthetic images/video; verification is manual and slow under deadline.
+
+Gaming
+7 themes · 20 use cases
+Autonomous Game QA & Certification
+Autonomous Gameplay Exploration Testing Agents
+The problem to solve
+Manual testers cannot cover the combinatorial space of open worlds, builds and platforms; collision, progression and soft-lock bugs escape to launch.
+
+Bug Triage, De-duplication & Repro Agent
+The problem to solve
+Thousands of bug reports from QA, playtests and players arrive with duplicates and poor repro steps; producers spend hours triaging.
+
+Localisation QA (LQA) Agent
+The problem to solve
+Localised builds suffer text overflow, truncation, wrong fonts, untranslated strings and cultural issues; LQA testers capture screens manually across languages.
+
+Console Certification (TRC/XR/Lotcheck) Pre-Submission Agent
+The problem to solve
+Platform certification requirements are extensive and change frequently; failures add weeks to launch schedules.
+
+Game Development Pipeline
+Crash & Performance Regression Triage Agent
+The problem to solve
+Crash dumps and performance telemetry from internal builds and live players are high-volume; teams struggle to identify regressions and root causes quickly.
+
+Art & Asset Pipeline Validation Agent
+The problem to solve
+Thousands of art assets (models, textures, animations) violate budgets, naming and technical standards; issues surface late in integration.
+
+Multi-Platform Build Failure Triage & Pipeline Agent
+The problem to solve
+Game builds across PC, consoles and mobile take hours and break often; engineers lose time diagnosing build and cook failures.
+
+LiveOps, Economy & Monetisation
+Game Economy Balancing Simulation Agent
+The problem to solve
+Economy designers tune drop rates, prices and sinks with spreadsheets; inflation, exploits and pay-to-win perceptions emerge after updates.
+
+LiveOps Event Planning & Configuration Agent
+The problem to solve
+LiveOps teams create events, offers and content drops via complex configuration; errors (wrong prices, rewards, timings) are common and costly.
+
+User Acquisition Creative & Campaign Optimisation Agent
+The problem to solve
+Mobile studios spend heavily on UA; creative testing, bidding and budget allocation across networks are manual and slow.
+
+Player Engagement & Support
+First-Session Churn Prevention & Re-engagement Agent
+The problem to solve
+Most new players leave in the first sessions; onboarding friction and difficulty spikes are found too late and responses are generic.
+
+Player Support Resolution Agent (Refunds, Account Recovery, Purchases)
+The problem to solve
+Player support handles high volumes of account recovery, missing purchases and bans; agents lack context and actions require multiple tools.
+
+Trust & Safety, Fraud and Cheating
+Cheat & Bot Detection and Enforcement Agent
+The problem to solve
+Cheaters and bots degrade competitive games and economies; detection mixes client anti-cheat with manual review of reports.
+
+Chat Toxicity Moderation & Appeals Agent
+The problem to solve
+Text and voice chat abuse requires moderation at scale; rules vary by age and region and appeals are slow.
+
+Promotion & Bonus Abuse Fraud Agent (iGaming and F2P)
+The problem to solve
+Free games, bonuses and prizes are abused by multi-accounting rings and arbitrage; rules-based controls lag new patterns.
+
+iGaming & Casino Compliance and Operations
+Responsible Gambling Customer-Interaction Agent
+The problem to solve
+Operators must identify customers at risk of harm and intervene early; analysts review markers manually, interventions are inconsistent and evidence for regulators is weak.
+
+iGaming KYC/AML & Source-of-Funds Review Agent
+The problem to solve
+Enhanced due diligence and source-of-funds reviews require collecting documents, verifying them and judging plausibility; queues delay withdrawals and frustrate VIPs.
+
+Game Content Certification & Jurisdiction Submission Agent
+The problem to solve
+Slot and table game content must be tested and submitted to labs/regulators per jurisdiction (e.g., GLI standards) with extensive documentation; submissions are manual.
+
+Casino Floor Slot Performance & Floor Optimisation Agent
+The problem to solve
+Land-based casinos decide slot mix, placement and denominations from periodic reports; performance changes and opportunities are spotted late.
+
+Esports & Tournament Operations
+Esports Tournament Operations & Dispute Agent
+The problem to solve
+Tournament organisers manage registrations, brackets, scheduling, rule checks and match disputes manually across platforms.
+
+Mining
+9 themes · 20 use cases
+Exploration & Geological Intelligence
+AI-Enabled Drill Hole Targeting & Programme Optimisation Agent
+The problem to solve
+Infill and extension drilling programmes are designed manually from geological models; holes are placed sub-optimally, wasting metres and delaying resource confidence.
+
+Core Logging & Core Photo Interpretation Agent
+The problem to solve
+Geological logging of drill core is manual and inconsistent between geologists; core photos are underused.
+
+Mine Planning & Short-Interval Control
+Short-Interval Control (SIC) Deviation Response Agent
+The problem to solve
+Shift plans deviate due to equipment, blasting delays or grade surprises; supervisors re-plan by radio and spreadsheets.
+
+Haul Fleet Dispatch Exception & Cycle-Time Agent
+The problem to solve
+Haul truck queuing, unplanned delays and suboptimal assignments inflate cycle times; dispatchers manage exceptions manually.
+
+Blast Design & Fragmentation Optimisation Agent
+The problem to solve
+Blast designs are adjusted by experience; fragmentation results (drone imagery) and downstream impacts on loading and milling are not fed back systematically.
+
+Fleet & Asset Reliability
+Predictive Maintenance Work-Order Orchestration Agent (Mobile & Fixed Plant)
+The problem to solve
+Condition signals (oil analysis, vibration, telemetry) are reviewed by reliability engineers in silos; work orders are raised late and parts are unavailable.
+
+Processing & Metallurgical Performance
+Ore-to-Mill Grade Reconciliation Agent
+The problem to solve
+Reconciliation between resource model, grade control, mill feed and metal produced is monthly, manual and poorly explained.
+
+Concentrator Flotation Performance Advisory Agent
+The problem to solve
+Flotation recovery fluctuates with ore variability; operators adjust reagents and air by experience, and advanced process control coverage is partial.
+
+Tailings, Water & Environmental Compliance
+Tailings Facility Monitoring & GISTM Compliance Agent
+The problem to solve
+Tailings monitoring data (piezometers, InSAR, prisms) and inspection findings are reviewed periodically; GISTM documentation and EoR reporting are manual.
+
+Mine Water Balance & Discharge Compliance Agent
+The problem to solve
+Water balances across pits, dams and plants are maintained in spreadsheets; licence compliance for discharge quality is reactive.
+
+Mine Closure & Rehabilitation Liability Agent
+The problem to solve
+Closure cost estimates and rehabilitation progress are updated infrequently; financial provisions and regulatory guarantees can be misstated.
+
+Safety & Critical Risk
+Critical Control Verification (CCV) & Safety Agent Programme
+The problem to solve
+Critical control verifications for fatal risks (isolation, working at height, vehicle interaction) are done on paper; trends and failures are not acted on systematically.
+
+Fall-of-Ground Geotechnical Risk Agent (Underground)
+The problem to solve
+Seismic, convergence and inspection data for underground excavations are analysed separately; high-risk areas are not consistently identified before entry.
+
+Energy & Power Resilience
+Mine Energy Cost & Load-Curtailment Optimisation Agent
+The problem to solve
+Mines face time-of-use tariffs, demand charges and supply curtailment; pumping, ventilation and milling loads are scheduled without energy optimisation.
+
+Mining Supply Chain & Logistics
+Mining Procurement & Critical Spares Availability Agent
+The problem to solve
+Remote mines hold large spares inventories yet still suffer stock-outs of critical parts; requisitions, approvals and supplier follow-up are slow.
+
+Concentrate Logistics & Export Shipment Planning Agent
+The problem to solve
+Concentrate and ore exports depend on rail slots, port capacity and vessel schedules; disruptions are managed by email and phone.
+
+Workforce, Social Licence & Regulatory Reporting
+Mining Charter, B-BBEE & SLP Compliance Reporting Agent
+The problem to solve
+SA miners must report Mining Charter, B-BBEE procurement and Social and Labour Plan commitments; data is collected manually from HR, procurement and community projects.
+
+Contractor Onboarding & Permit Competency Agent
+The problem to solve
+Mines rely on large contractor workforces; verifying inductions, medical fitness, competencies and permits before site access is manual.
+
+Critical Minerals Traceability & Battery Passport Agent
+The problem to solve
+Customers (OEMs, battery makers) and regulations (EU Battery Regulation) demand chain-of-custody, ESG and carbon footprint data for copper, cobalt, nickel and zinc.
+
+Workforce Fatigue-Aware Rostering & Skills Deployment Agent
+The problem to solve
+Rosters are built manually around shift patterns, leave and skills; fatigue risk and critical skills coverage are not optimised.
+
+Supply Chain Management
+7 themes · 20 use cases
+Intelligent Procurement (Source-to-Pay)
+Autonomous PR-to-PO Buying Agent (Tail & Catalogue Spend)
+The problem to solve
+Low-value requisitions consume buyer time; free-text PRs require clarification, supplier selection and PO creation in ERP.
+
+Sourcing Event (RFQ) Analysis & Award Recommendation Agent
+The problem to solve
+RFQs produce bids in inconsistent formats; normalising, comparing total cost and clarifying with suppliers is manual.
+
+Contract Price Compliance & Invoice Leakage Agent
+The problem to solve
+Invoices frequently deviate from contracted prices, rebates and terms; AP matching catches only simple mismatches.
+
+Supplier Intelligence, Risk & Collaboration
+Supplier Onboarding & Due Diligence Agent
+The problem to solve
+Onboarding suppliers requires collecting documents, KYC/sanctions checks, financial and ESG screening and ERP vendor creation; it takes weeks.
+
+Supplier Risk Sensing & Mitigation Playbook Agent
+The problem to solve
+Supplier risk signals (financial distress, disasters, strikes, sanctions, port closures) are monitored by tools but responses are ad hoc.
+
+PO Confirmation & Supplier Expediting Agent
+The problem to solve
+Buyers chase suppliers for order acknowledgements, delivery dates and ASNs by email; late deliveries surface too late.
+
+Demand, Inventory & Integrated Planning
+Demand Planning Exception & Forecast Review Agent
+The problem to solve
+Planners review thousands of forecast exceptions; most effort goes to low-value items while big misses are discovered late.
+
+Multi-Echelon Inventory Rebalancing Agent
+The problem to solve
+Inventory is imbalanced across DCs and stores; transfers are decided manually and late.
+
+S&OP Scenario & Supply-Demand Balancing Agent
+The problem to solve
+Monthly S&OP cycles rely on spreadsheets to reconcile demand, supply and financial plans; scenarios take days to build.
+
+Control Tower & Exception Management
+Cognitive Control Tower Exception Resolution Agent Fleet
+The problem to solve
+Control towers surface hundreds of exceptions (late shipments, shortages, quality holds) that teams resolve manually through email and calls.
+
+Logistics, Transport & Warehouse
+Freight Procurement & Spot Tender Agent
+The problem to solve
+Spot freight requests are quoted by email and portals; rate benchmarking and carrier selection are manual.
+
+Shipment ETA Prediction & Disruption Re-routing Agent
+The problem to solve
+Shipment delays (port congestion, weather, rail issues) are discovered late; re-routing and customer notification are manual.
+
+Warehouse Labour Planning & Slotting Agent
+The problem to solve
+Warehouse labour is planned on averages; slotting is rarely updated, increasing travel time.
+
+Freight Audit & Payment Agent
+The problem to solve
+Carrier invoices contain overcharges, accessorial errors and duplicates; manual audit is sampled and slow.
+
+Order Management & Production Scheduling
+Order Promising (ATP/CTP) & Order Exception Agent
+The problem to solve
+Customer service teams cannot give reliable delivery dates for complex orders; exceptions (credit holds, shortages, pricing errors) stall orders.
+
+Returns & Reverse Logistics Disposition Agent
+The problem to solve
+Returns are inspected and dispositioned (restock, refurbish, recycle, return-to-vendor) inconsistently; recovery value is lost.
+
+Finite-Capacity Production Scheduling Agent
+The problem to solve
+Production schedulers re-plan manually when orders change, materials are late or machines fail; changeovers and due dates conflict.
+
+Trade, Regulatory & Sustainability Compliance
+Customs Classification & Import Declaration Agent
+The problem to solve
+Classifying goods (HS/HTS codes), determining duties, origin and preparing declarations is expert-dependent; tariff changes create constant rework.
+
+EUDR & Forced-Labour Supply Chain Due Diligence Agent
+The problem to solve
+EUDR requires geolocation-based due diligence statements for commodities (cocoa, coffee, palm, soy, cattle, rubber, wood) from 30-Dec-2026; forced-labour rules (e.g., US UFLPA) require supply chain tracing.
+
+Scope 3 Supplier Emissions Data Collection & Engagement Agent
+The problem to solve
+Scope 3 reporting depends on supplier-specific emissions data; collection via questionnaires is slow, incomplete and inconsistent.
+
+Utilities
+8 themes · 20 use cases
+HLS
+HLS
+Healthcare and Life Sciences · 88 use cases
+
+Life Sciences R&D and Operations
+46
+Medical & Marketing Content
+39
+Healthcare, Payor & MedTech
+3
+Life Sciences R&D and Operations
+8 themes · 46 use cases
+Drug Discovery & R&D
+Asset Strategy Optimization
+The problem to solve
+Choosing which indications to pursue for an asset relies on scattered evidence and manual analysis.
+
+Target Discovery
+The problem to solve
+Identifying and validating targets means sifting huge volumes of biological and literature data by hand.
+
+Safety Prediction
+The problem to solve
+Safety liabilities are often found late through manual review of toxicology findings.
+
+Agent-Orchestrated R&D Value Chain Transformation
+The problem to solve
+Data and hand-offs across discovery, clinical, regulatory and manufacturing are siloed and manual, slowing the whole R&D value chain.
+
+Pre-Clinical
+Toxicity Modeling
+The problem to solve
+Toxicity and ADMET properties need expensive lab studies to assess.
+
+Clinical
+Evidence Mining
+The problem to solve
+Real-world data is fragmented and hard to mine for usable evidence.
+
+Synthetic Control Arms in Early Trials
+The problem to solve
+Recruiting and retaining control-arm patients in early trials is slow, costly and ethically difficult.
+
+GenAI-Powered Clinical Trial Copilot
+The problem to solve
+Protocol design, site selection, recruitment and monitoring are manual and data-fragmented, causing amendments, delays and protocol deviations.
+
+SDTM Automapper
+The problem to solve
+Mapping raw clinical and real-world data to SDTM standards is manual, slow and error-prone.
+
+Ethical AI Compliance Agent for Clinical Trials
+The problem to solve
+AI-driven trial decisions can carry bias, lack explainability and risk privacy breaches, while regulations keep changing across regions.
+
+Agentic AI Orchestration for LPLV to First Batch Release
+The problem to solve
+After LPLV, data analysis, CSR, submissions, tech transfer and batch release run as a linear, manual sequence with late hand-offs.
+
+Med Affairs & Regulatory
+Submission Automation
+The problem to solve
+Submission documents are assembled manually across many sources and formats.
+
+Risk Monitoring
+The problem to solve
+Regulatory changes are tracked manually and risks are spotted late.
+
+HAQ automation (Regulatory Query Response Automation)
+The problem to solve
+Health authority queries need fast, accurate, source-backed answers drawn from many documents.
+
+Compliance Automation
+The problem to solve
+Compliance checks and documentation are manual and repetitive.
+
+Impact Analysis
+The problem to solve
+Assessing the impact of regulatory or document changes across products and filings is manual.
+
+Pharmacovigilance
+Signal Detection
+The problem to solve
+Spotting emerging safety signals in large volumes of safety data is slow and manual.
+
+Case Automation
+The problem to solve
+Safety case intake, coding and processing are high-volume and manual.
+
+Report Automation
+The problem to solve
+Safety reports are compiled manually for each authority.
+
+Adverse Event Detection from EHRs
+The problem to solve
+Adverse events are buried in unstructured clinical notes and go unreported.
+
+Automated Case Triage
+The problem to solve
+Incoming safety cases are triaged manually, so urgent cases can wait.
+
+Causality Assessment Automation
+The problem to solve
+Causality assessment needs expert review of every case.
+
+Automated Literature Screening
+The problem to solve
+Safety literature screening across many journals is manual and repetitive.
+
+Risk Management Plan Optimization
+The problem to solve
+Risk management plans are updated manually and slowly as new data arrives.
+
+Chatbot for AE Reporting
+The problem to solve
+Patients find adverse event reporting hard, so reports are incomplete or missed.
+
+Regulatory Intelligence Automation
+The problem to solve
+Tracking regulatory updates across countries is manual.
+
+Manufacturing & Supply Chain
+Forecasting
+The problem to solve
+Demand and supply plans rely on static, manual forecasting.
+
+Procurement Optimization
+The problem to solve
+Procurement decisions are fragmented across suppliers and spend data.
+
+Inventory Tracking
+The problem to solve
+Inventory visibility is limited and updates are manual.
+
+Tracking Automation
+The problem to solve
+Product movement is hard to trace end to end.
+
+Distribution Optimization
+The problem to solve
+Distribution routes and allocation are planned manually.
+
+Supplier Analytics
+The problem to solve
+Supplier performance and risk are tracked in silos.
+
+Audit Automation
+The problem to solve
+Audit and inspection preparation is manual and time-consuming.
+
+Quality Control Automation
+The problem to solve
+Quality control checks and release decisions rely on manual review.
+
+Real-Time Supply Chain Visibility
+The problem to solve
+Supply chain data is scattered across systems, giving delayed visibility.
+
+Predictive Maintenance
+The problem to solve
+Equipment failures are found only after they stop production.
+
+Data & master data management
+SAP Material Master Harmonization
+The problem to solve
+ConMed carries up to 87,000 SAP material codes across plants, sites and vendors, many likely duplicates or near-duplicates. Specifications and vendor test procedures aren't compared side by side, and Procurement, Quality, Regulatory, R&D, Manufacturing and IT can't easily agree what to harmonise.
+
+Commercial
+Sales Forecasting
+The problem to solve
+Sales plans depend on manual, backward-looking forecasts.
+
+Execution Optimization
+The problem to solve
+Field teams lack data-driven guidance on where and how to engage.
+
+Engagement Analytics
+The problem to solve
+HCP engagement data is scattered across channels.
+
+KOL Identification
+The problem to solve
+Finding and mapping the right KOLs is manual and subjective.
+
+Call Planning Optimization
+The problem to solve
+Reps plan calls with limited insight into which HCPs to see and when.
+
+Territory Optimization
+The problem to solve
+Territories are aligned manually and go out of date.
+
+Predictive Adherence Monitoring
+The problem to solve
+Non-adherence is detected only after patients drop off therapy.
+
+Competitive Intelligence for Strategic Brand Positioning
+The problem to solve
+Competitor launches, messaging and access changes are tracked manually and reactively, so brand teams act late.
+
+GenAI-Powered Personalized Marketing Campaign Engine
+The problem to solve
+Campaigns rely on broad segments and manual content and orchestration, so messaging is generic and slow to adapt.
+
+Medical & Marketing Content
+7 themes · 39 use cases
+Strategy & planning
+Intake & objective definition
+The problem to solve
+Stakeholder requests arrive vague and unstructured, so teams start on the wrong objective.
+
+Audience segmentation
+The problem to solve
+HCP, patient and channel data sits in silos and is slow to segment manually.
+
+Patient/HCP journey mapping
+The problem to solve
+Journeys and content needs are mapped by hand from scattered research.
+
+Content gap analysis
+The problem to solve
+No quick view of what content exists versus what is actually needed.
+
+Channel/content planning
+The problem to solve
+Format and channel choices are judgement-led and inconsistent across teams.
+
+Content calendar
+The problem to solve
+Editorial calendars are built and updated manually and drift from the strategy.
+
+Evidence & science
+Literature search
+The problem to solve
+Manual search across publications, guidelines and trials is slow and often incomplete.
+
+Evidence extraction
+The problem to solve
+Pulling endpoints, populations and outcomes from papers is tedious and error-prone.
+
+Evidence synthesis
+The problem to solve
+Synthesising large evidence sets consumes scarce expert time.
+
+Claim identification
+The problem to solve
+Deciding which findings can be used as claims is slow and inconsistent.
+
+Claim-reference mapping
+The problem to solve
+Linking each claim to its source reference is manual and error-prone.
+
+Evidence freshness check
+The problem to solve
+Evidence and references go stale without anyone noticing.
+
+Brief & creation
+Content brief generation
+The problem to solve
+Briefs are written from scratch per channel and audience, with uneven quality.
+
+SME briefing
+The problem to solve
+SMEs receive unstructured asks and lose time clarifying context.
+
+Outline generation
+The problem to solve
+Structuring content from evidence takes time before writing even begins.
+
+Scientific language optimization
+The problem to solve
+Dense scientific text needs repeated rewriting for clarity.
+
+Audience adaptation
+The problem to solve
+The same message has to be reworked for HCPs, patients and field force.
+
+Multiformat repurposing
+The problem to solve
+Turning one master asset into many formats is repetitive manual work.
+
+Visual/storyboard generation
+The problem to solve
+Visual concepts, scripts and storyboards take multiple creative cycles.
+
+Quality & compliance
+Scientific fact check
+The problem to solve
+Manually checking every statement against evidence is slow.
+
+Citation validation
+The problem to solve
+Citations get mismatched, malformed or missing.
+
+Claim compliance
+The problem to solve
+Checking claims against the approved library is manual and inconsistent.
+
+Safety/fair-balance check
+The problem to solve
+Missing safety information or fair balance is easy to overlook.
+
+Consistency/version check
+The problem to solve
+Comparing versions against the approved master is error-prone.
+
+MLR review
+Medical review preparation
+The problem to solve
+Reviewers receive drafts without context or pre-flagged issues.
+
+Medical review
+The problem to solve
+Final scientific judgement needs a qualified human reviewer.
+
+Legal review support
+The problem to solve
+Legal risks are often spotted late in the cycle.
+
+Regulatory review support
+The problem to solve
+Regulatory requirements vary and are checked manually.
+
+Comment consolidation
+The problem to solve
+Multiple reviewers leave overlapping and conflicting comments.
+
+Revision/redline generation
+The problem to solve
+Applying approved changes by hand introduces errors and delay.
+
+Approval package
+The problem to solve
+Assembling references, versions and history is manual.
+
+Localization
+Translation
+The problem to solve
+Translation is slow and terminology is inconsistent across markets.
+
+Transcreation
+The problem to solve
+Literal translation misses tone and cultural context.
+
+Local regulatory adaptation
+The problem to solve
+Each country has its own claims and rules to apply.
+
+Local MLR support
+The problem to solve
+Local drafts reach review with avoidable issues.
+
+Publishing & optimization
+Metadata/tagging
+The problem to solve
+Manual tagging of assets is inconsistent.
+
+CMS/DAM publishing
+The problem to solve
+Routing and publishing to CMS/DAM is manual.
+
+Reuse/expiry management
+The problem to solve
+Reuse opportunities are missed and expired content stays live.
+
+Performance analytics & optimization
+The problem to solve
+Performance insights rarely feed back into content decisions.
+
+Healthcare, Payor & MedTech
+3 themes · 3 use cases
+Patient experience & digital health
+GenAI-Powered Patient Engagement Copilot
+The problem to solve
+Patients get generic, hard-to-understand information and little ongoing support, hurting adherence and satisfaction.
+
+Payor operations & patient access
+GenAI Copilot for Claims, Rebates, and Refunds Optimization
+The problem to solve
+Claims, rebate and refund requests arrive through multiple channels, are processed manually and often lack documentation, causing errors and long turnaround.
+
+Med Devices Operations
+GenAI Copilot for Laboratory Work Automation
+The problem to solve
+Manual data capture from instruments and handwritten notes, ad-hoc protocols and reactive equipment maintenance cause errors and downtime.
+
+CS
+CS
+Consumer Services · 10 use cases
+
+Consumer Services
+10
+Consumer Services
+10 themes · 10 use cases
+Supply Chain Resilience
+A risk assessment indicator for each inbound shipment
+The problem to solve
+Socio economic unrest (port strikes)
+Political upheaval (like the Bangladesh student unrest)
+Financial issues with suppliers
+Meteorological issues like cyclones etc are all reported on different channels, in different geographies and in different languages.
+Understand these and flag a risk to a shipment if the geography from which it is being sources is at risk or the path the shipment is taking on land, or ocean is at risk.
+
+Last Mile Network Planning
+Given a geo-location, assess which polygon it should belong to; Additionally, how to define polygons given a set of OD pairs
+The problem to solve
+Imagine a quick commerce retailer. Assessing where to have an inventory fulfillment centre/dark-store and how to define a polygon which it can fulfill orders to. That is the problem which can save upto 20% of last mile delivery cost.
+
+Baggage Operations & Airport Efficiency
+Predictive transfer bag rescue
+The problem to solve
+For every connecting bag, continuously evaluate whether it is likely to miss its onward flight by combining bag scans, incoming-flight delay, connection time, airport/belt conditions, gate changes and interline hand-offs. Instead of discovering a missing bag at destination, identify a bag while intervention is still possible and recommend whether to expedite, reroute, reflight or otherwise intervene
+
+Travel Disruption Intelligence
+A disruption risk score for each scheduled flight, route and hub for the next 24-72 hrs
+The problem to solve
+Meteorological issues (storms, fog, cyclones, volcanic ash)
+Air traffic control and labour strikes (union notices in French, German, Italian etc.)
+Geopolitical airspace closures and conflict (NOTAMs, government advisories, local news)
+Airport congestion and staffing shortages.
+These are all reported on different channels, in different formats and in different languages. Understand these and flag a risk to a flight if its origin, destination or route is at risk, estimate the cost (extra fuel, rebooking, hotel vouchers, passenger compensation) and recommend the cheapest mitigation (reroute, extra fuel, aircraft swap, proactive rebooking)
+
+Hotel Revenue & Inventory Optimization
+Cancellation Risk & Inventory Recapture Engine
+The problem to solve
+Identify which live reservations are likely to cancel and, importantly, when they are likely to cancel by combining channel, booking lead time, rate plan, deposit/payment status, booking modifications, guest history, market demand, events and other relevant signals.
+
+Use the resulting risk to support decisions such as inventory reopening, deposit requests, wait-list activation or controlled overbooking within defined limits
+
+Travel Payment Fraud & Chargebacks
+A fraud risk score at checkout, plus a dispute-likelihood score for each completed booking after a disruption
+The problem to solve
+Stolen card / card-not-present fraud
+Account takeover and loyalty points fraud
+Friendly fraud and refund abuse
+Disruption-triggered disputes (delays, cancellations, hotel overbooking).
+Signals are spread across payment gateways, booking systems, loyalty platforms, flight status feeds and customer communications.
+
+Flag risky bookings without blocking genuine travellers, predict which bookings will be disputed after a disruption, trigger a proactive refund, voucher or rebooking before the customer goes to their bank, and auto-assemble evidence to fight invalid disputes
+
+Optimising Retail Media spend for Retailers and Marketplaces as the search and discovery moves from traditional search engines to LLMs.
+Retail Media ROI Vs LLMs Discoverability Growth optimisation Engine
+The problem to solve
+With growing discovery and intent details moving to LLMs the Retail media spend is showing a inverse correlation to the Agentic commerce growth. Need to identify the balance between the two and how retailers can optimise the spend on REtail Media vs LLMs Discoverability.
+
+Hardening cyber security for Physical Stores and Ecommerce in the wake of growing hacking attacks on prominent retailers.
+Risk Intelligence System to identify vulnerabilities on Physical IOT Devices as well as applications/systems in Enterprise.
+The problem to solve
+With Stores Operations systems like Refigeration systems and Online Ecommerce sites being hacked globally in multiple instances, we are seeing growing usage of AI by Hackers in advancing the capabilities. Need to build risk intelligence system for all the applications, IOT devices and systems across the enterprise to highlight key areas of vulnerability early enough and actions to address them.
+
+Content and metadata generation on the websites/apps which are tailored specifically for Human browsing, SEO searches for metadata and contextual/detailed product/pricing data for LLM searches.
+Curated content management for Human Vs Agents as well as different channels of sale like Marketplaces, Social Media, Website, Search enginess and LLMs.
+The problem to solve
+Marketers are increasingly grappling with the challenge to curate the content of the website Product Data/Content which is tailored and personalised not just for individual humans/cohorts but also to channels they expose that data. With Retail data being exposed to multiple channels like Search Engines, Marketplaces, Social Media Channels, Channel Parnters/Franchises, LLMs and Shopping agents, each channels has a specific need and needs to be addressed accordingly. While a human would searching on the site would be more influenced by emotive content and audio/visual imagery on PDP/Home pages, the personalised shopping agents are objective and purely look for the trade off for purchases across sites. How do we optimise for both and also for different channels.
+
+Retailer customised MCP integrations to support partnering with multiple LLMs
+Custom MCP Server for Retailer to support multiple LLM integrations.
+The problem to solve
+How the MCP design should like on the Retailer side to cater to the incoming search feeds from multiple LLMs and also cater to the volume.
+
+FAQs · answers to the most common questions on taking part, RPG Click and AgentMesh
+Read the FAQs
+Daily Open House · every day at 5:30 PM IST · drop in with your questions
+Join the Open House
+Questions or support? Write to the Technical Learning team:
+techlearning@zensar.com
+Copy
+Email us in Outlook
+ZenSpark AI Hackathon 2026 · Season 2 · For internal communication p
