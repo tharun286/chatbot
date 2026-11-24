@@ -1,0 +1,275 @@
+# Task: CodeGenome Connectors (Git, Azure DevOps Boards, Jira)
+---
+
+## 1. Why we are building this
+
+CodeGenome today needs a **.zip upload** to start a discovery run, and it has no link to the client's work tracking. Connectors fix both:
+
+1. **Source intake** – start a discovery run from a Git repository and commit instead of a zip.
+2. **Work items in** – pull defects/incidents from Jira or Azure DevOps Boards so the platform knows the support history of each component.
+3. **Work items out** – push the modernization plan (waves, modules, acceptance criteria from recovered business rules) into Jira or ADO Boards.
+4. **Agent access** – let agents read tickets and propose updates through MCP, with a human approval before any write.
+
+## 2. Scope
+
+**In scope**
+
+- Git source connector: GitHub, Azure DevOps Repos, GitLab (GitHub + ADO Repos first)
+- Work-item connectors: Azure DevOps Boards, Jira Cloud
+- Webhooks + polling fallback, idempotent push, health/freshness, audit log
+- Vendor MCP servers configured for agents (read-only by default)
+- A small CodeGenome "work-items" MCP facade (3 tools)
+
+## 3. Architecture
+
+```
+Agents (Claude Agent SDK / OpenCode / Kiro)
+   │ MCP
+   ├── Vendor MCP servers (Atlassian, Azure DevOps, GitHub)   ← read-only, allowlisted per tenant
+   └── codegenome-workitems MCP (our facade, 3 tools)          ← M7
+            │
+   Connector sync service (Python, REST/SDK)                    ← M1–M5: you build this
+     ├── webhooks  (POST /webhooks/{kind}/{connector_id})
+     ├── polling   (scheduled pull_changes since last cursor)
+     ├── push      (idempotent upsert, dry-run by default)
+     └── health    (last sync, errors, backlog)
+            │
+   Git · Azure DevOps Boards · Jira Cloud
+```
+
+**Rule of thumb:** anything scheduled, event-driven, bulk or idempotent goes in the **sync service (plain REST)**. Anything an agent decides to do at runtime goes through **MCP**.
+
+## 4. Where the code goes
+
+```
+app/
+  connectors/
+    __init__.py
+    base.py              # interfaces + common types (section 5)
+    registry.py          # kind -> class
+    git_source.py        # M1
+    ado_boards.py        # M2
+    jira_cloud.py        # M3
+    sync_service.py      # polling loop, cursors, retries (M2/M4)
+    mapping.py           # CodeGenome <-> external field mapping (section 6)
+    secrets.py           # read secrets by reference only
+  routes/
+    connectors.py        # config, test, push, replay, health
+    webhooks.py          # inbound webhooks
+  mcp/
+    workitems_server.py  # M7
+tests/connectors/
+  fixtures/              # recorded API responses (vcrpy cassettes)
+docs/connectors/
+  SPEC.md                # this file
+  <kind>.md              # one README per connector
+```
+
+Database changes go in `app/db.py` as **additive** migrations, the same way existing tables are created.
+
+## 5. Interfaces (implement exactly these)
+
+```python
+# app/connectors/base.py
+from dataclasses import dataclass, field
+from datetime import datetime
+from typing import Iterable, Protocol, Literal
+
+Kind = Literal["git_github", "git_ado", "git_gitlab", "ado_boards", "jira_cloud"]
+
+@dataclass
+class Health:
+    ok: bool
+    message: str                      # human readable, e.g. "PAT missing scope vso.work_write"
+    checked_at: datetime
+
+@dataclass
+class ExternalItem:                   # something we pulled from Jira/ADO
+    system: str                       # "jira_cloud" | "ado_boards"
+    external_id: str                  # "PROJ-123" | "4512"
+    type: str                         # normalized: epic | feature | story | bug | task
+    title: str
+    description_text: str             # plain text (convert ADF / HTML)
+    status: str                       # normalized: todo | in_progress | done
+    updated_at: datetime
+    url: str
+    labels: list[str] = field(default_factory=list)
+    links: list[dict] = field(default_factory=list)   # {rel, external_id}
+    raw: dict = field(default_factory=dict)           # original payload (stored, not logged)
+
+@dataclass
+class OutboundItem:                   # something we push
+    codegenome_id: str                # e.g. "wave:1", "module:ledger-data-model"
+    type: str                         # epic | feature | story
+    title: str
+    description_md: str
+    acceptance_criteria: list[str]    # one line per recovered rule, with rule id
+    parent_codegenome_id: str | None
+    labels: list[str]
+
+@dataclass
+class PushResult:
+    codegenome_id: str
+    action: Literal["created", "updated", "unchanged", "skipped_dry_run", "failed"]
+    external_id: str | None
+    url: str | None
+    detail: str = ""
+
+class WorkItemConnector(Protocol):
+    kind: Kind
+    def test_connection(self) -> Health: ...
+    def pull_changes(self, since: datetime) -> Iterable[ExternalItem]: ...
+    def handle_webhook(self, headers: dict, body: bytes) -> Iterable[ExternalItem]: ...
+    def push(self, item: OutboundItem, dry_run: bool = True) -> PushResult: ...
+
+class SourceConnector(Protocol):
+    kind: Kind
+    def test_connection(self) -> Health: ...
+    def fetch_snapshot(self, repo: str, ref: str, dest_dir: str) -> "SnapshotRef": ...
+    def handle_webhook(self, headers: dict, body: bytes) -> "PushEvent | None": ...
+
+@dataclass
+class SnapshotRef:
+    repo: str
+    ref: str                          # branch or tag requested
+    commit_sha: str                   # resolved commit
+    path: str                         # workspace directory on the jobs volume
+    content_hash: str                 # sha256 of the file tree
+
+@dataclass
+class PushEvent:
+    repo: str
+    branch: str
+    commit_sha: str
+```
+
+## 6. Field mappings
+
+### 6.1 What we push (work items out)
+
+| CodeGenome | Jira Cloud | Azure DevOps Boards |
+|---|---|---|
+| Wave | Epic | Epic |
+| Module / build unit | Story (parent = Epic) | Feature (parent = Epic) |
+| Business rule | **One acceptance-criteria line** in the Story, not a separate issue | **One line** in `Microsoft.VSTS.Common.AcceptanceCriteria` |
+| `codegenome_id` | Label `cg-<id>` + row in `external_link` | Tag `cg:<id>` in `System.Tags` + row in `external_link` |
+| Title | `summary` | `System.Title` |
+| Description (Markdown) | `description` as **ADF** (convert from Markdown) | `System.Description` as **HTML** (convert from Markdown) |
+| Parent | `parent: {key}` | Relation `System.LinkTypes.Hierarchy-Reverse` |
+
+> Rules become acceptance-criteria lines, not tickets. 800 rules must not create 800 issues.
+
+### 6.2 What we pull (work items in)
+
+| Normalized field | Jira Cloud | Azure DevOps Boards |
+|---|---|---|
+| `external_id` | `key` | `id` |
+| `type` | `issuetype.name` → epic/story/bug/task | `System.WorkItemType` → epic/feature/story/bug/task |
+| `status` | `status.statusCategory.key` (new/indeterminate/done) | `System.State` mapped per process template |
+| `updated_at` | `fields.updated` | `System.ChangedDate` |
+| `description_text` | ADF → plain text | HTML → plain text |
+| `labels` | `labels` | `System.Tags` (split on `;`) |
+| `links` | `issuelinks`, `parent` | `relations` |
+
+Pull **bugs and incidents** by default (`type in (bug)`); make the filter configurable per connector (JQL / WIQL).
+
+### 6.3 Git source
+
+| Item | Rule |
+|---|---|
+| Fetch | `git init` + `git fetch --depth 1 origin <sha-or-ref>` + `git checkout FETCH_HEAD` (no full clone) |
+| Auth | Token via `GIT_ASKPASS` or a credential helper; **never** put the token in the URL or logs |
+| Output | Same workspace layout the zip upload produces today, so `discovery-360` runs unchanged |
+| Record | `commit_sha`, `content_hash`, repo, ref on the codebase/job row |
+
+## 7. Database (additive tables)
+
+```sql
+CREATE TABLE connector_config (
+  connector_id   VARCHAR(64) PRIMARY KEY,
+  project_id     VARCHAR(64) NOT NULL,          -- tenant scope
+  kind           VARCHAR(32) NOT NULL,
+  base_url       TEXT NOT NULL,                 -- https://dev.azure.com/org, https://x.atlassian.net
+  scope_json     JSON NOT NULL,                 -- project key / area path / repo / JQL / WIQL filter
+  secret_ref     VARCHAR(255) NOT NULL,         -- name of the secret, NOT the secret
+  webhook_secret_ref VARCHAR(255),
+  enabled        BOOLEAN DEFAULT TRUE,
+  created_by     VARCHAR(64), created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE external_link (                    -- idempotency + traceability
+  codegenome_id  VARCHAR(255) NOT NULL,
+  connector_id   VARCHAR(64)  NOT NULL,
+  external_id    VARCHAR(128) NOT NULL,
+  url            TEXT,
+  payload_hash   CHAR(64),                      -- skip update if unchanged
+  updated_at     TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (codegenome_id, connector_id),
+  UNIQUE KEY (connector_id, external_id)
+);
+
+CREATE TABLE external_item (                    -- pulled tickets (defects etc.)
+  connector_id   VARCHAR(64) NOT NULL,
+  external_id    VARCHAR(128) NOT NULL,
+  type VARCHAR(32), status VARCHAR(32), title TEXT, description_text LONGTEXT,
+  url TEXT, labels_json JSON, links_json JSON, raw_json LONGTEXT,
+  updated_at     TIMESTAMP,
+  PRIMARY KEY (connector_id, external_id)
+);
+
+CREATE TABLE connector_sync_state (             -- feeds Platform health
+  connector_id   VARCHAR(64) PRIMARY KEY,
+  cursor_at      TIMESTAMP NULL,                -- last successful "since"
+  last_success_at TIMESTAMP NULL,
+  last_error_at  TIMESTAMP NULL,
+  last_error     TEXT,
+  errors_24h     INT DEFAULT 0,
+  backlog        INT DEFAULT 0
+);
+
+CREATE TABLE connector_audit (                  -- every outbound write
+  audit_id       VARCHAR(64) PRIMARY KEY,
+  connector_id   VARCHAR(64), codegenome_id VARCHAR(255), external_id VARCHAR(128),
+  action         VARCHAR(32), dry_run BOOLEAN, payload_hash CHAR(64),
+  actor          VARCHAR(64),                   -- user or "system"
+  approved_by    VARCHAR(64),                   -- HITL approver for agent-proposed writes
+  at             TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+```
+
+## 8. API routes to add
+
+| Method | Path | Purpose |
+|---|---|---|
+| POST | `/connectors` | Create connector config (admin only) |
+| GET | `/connectors?project_id=` | List connectors for a project |
+| POST | `/connectors/{id}/test` | Run `test_connection`, return `Health` |
+| GET | `/connectors/{id}/health` | Values from `connector_sync_state` |
+| POST | `/connectors/{id}/pull` | Trigger `pull_changes` now |
+| POST | `/connectors/{id}/push?dry_run=true` | Push a plan (body: list of `OutboundItem`), returns `PushResult[]` |
+| POST | `/connectors/{id}/replay?since=` | Re-pull from a timestamp |
+| POST | `/webhooks/{kind}/{connector_id}` | Inbound webhook (no JWT; signature-verified) |
+| POST | `/codebases/from-repo` | Create codebase + start discovery from `{connector_id, repo, ref}` |
+
+All routes except webhooks use the existing JWT auth and must check the caller has access to the project.
+
+## 9. Guardrails (non-negotiable)
+
+1. **Idempotent push.** Look up `external_link` first. If found and `payload_hash` unchanged → `unchanged`. If found → update. If not found → search by label/tag `cg:<id>` (recovers from a lost DB row) → create only if still not found.
+2. **`dry_run=True` is the default** everywhere. A real push requires an explicit `dry_run=false`.
+3. **Never delete** anything in an external system. No delete code paths.
+4. **Secrets by reference only.** `secret_ref` points to an env var / K8s secret / cloud key vault entry. Never store, return or log the value. Redact `Authorization` headers in all logs.
+5. **Least privilege.** Document the minimum scopes per connector (e.g. ADO PAT: Work Items Read & Write, Code Read; Jira: read/write issues in the configured project only).
+6. **Tenant scope.** Every query filters by the connector's project/scope. A connector must never read another project's items.
+7. **Rate limits.** Retry 429 and 5xx with exponential backoff + jitter (max 5 tries), honour `Retry-After`. Respect page sizes (ADO: max 200 ids per batch get; Jira: paginate search).
+8. **Webhook security.** Verify signatures where the system supports it (GitHub `X-Hub-Signature-256` HMAC, GitLab `X-Gitlab-Token`). For systems without signing, use a per-connector secret in the webhook URL **plus** basic auth, and reject everything else. Webhook handlers must return fast (enqueue, then process).
+9. **Cursor safety.** Store `cursor_at` only after a page is fully processed; overlap the next `since` by 2 minutes and de-duplicate by `(connector_id, external_id, updated_at)`. All times in UTC.
+10. **Audit every write** (real or dry-run) in `connector_audit`.
+
+
+## References
+
+- Jira Cloud REST API v3 — https://developer.atlassian.com/cloud/jira/platform/rest/v3/
+- Azure DevOps REST API (Work Item Tracking, Git, Service Hooks) — https://learn.microsoft.com/en-us/rest/api/azure/devops/
+- GitHub REST API and webhooks — https://docs.github.com/en/rest and https://docs.github.com/en/webhooks
+- Official MCP servers: Atlassian Remote MCP, Azure DevOps MCP Server, GitHub MCP Server (use the vendor-published versions; pin them)
